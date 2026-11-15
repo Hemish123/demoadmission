@@ -10,8 +10,7 @@ from django.conf import settings
 from .models import QuizSubmission, AdmissionApplication
 from .questions_data import ALIGNED_ANSWERS
 from .serializers import SubmitQuizSerializer, QuizSubmissionListSerializer, AdmissionApplicationSerializer
-from .whatsapp_service import generate_whatsapp_link
-from .whatsapp import send_whatsapp_template_message
+from .whatsapp import generate_whatsapp_link, send_whatsapp_template_message, normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -144,14 +143,18 @@ class SubmitQuizView(APIView):
             submission.is_eligible = is_eligible
             submission.qa_status = qa_status
             submission.tag = tag
+            # If parent selected language (e.g. 'gu' or 'en') during quiz
+            if language:
+                submission.language = language
             submission.save()
 
-            logger.info(f"[POST /api/submit-quiz/] Existing Submission {submission.id} graded: Score {score}/7 ({tag}), QA: {qa_status}")
+            logger.info(f"[POST /api/submit-quiz/] Existing Submission {submission.id} graded: Score {score}/7 ({tag}), QA: {qa_status}, Language: {submission.language}")
 
             return Response({
                 "status": "success",
                 "submission_id": submission.id,
                 "vibhag": submission.vibhag,
+                "language": submission.language or "en",
                 "qa_status": qa_status,
                 "score": score,
                 "total": len(ALIGNED_ANSWERS),
@@ -163,7 +166,7 @@ class SubmitQuizView(APIView):
             }, status=status.HTTP_200_OK)
 
         # Otherwise, creating a new enquiry (Admin side)
-        clean_phone = "".join(filter(str.isdigit, str(whatsapp_number)))
+        clean_phone = normalize_phone_number(whatsapp_number)
         clean_phone_10 = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
 
         # 1. First check if an application has already been submitted for this child/phone
@@ -426,6 +429,7 @@ class AdmissionFormEligibilityCheckView(APIView):
             "can_fill_form": True,
             "already_submitted": False,
             "submission_id": submission.id,
+            "language": submission.language or "en",
             "score": submission.score,
             "tag": submission.tag,
             "vibhag": submission.vibhag,
@@ -436,6 +440,7 @@ class AdmissionFormEligibilityCheckView(APIView):
                 "child_name": submission.child_name,
                 "whatsapp_number": submission.whatsapp_number,
                 "email": submission.email,
+                "language": submission.language or "en",
                 "is_locked_for_user": True
             }
         }, status=status.HTTP_200_OK)
@@ -575,20 +580,20 @@ class AdmissionApplicationView(APIView):
             new_number = request.data.get("whatsapp_number") or request.data.get("father_mobile") or request.data.get("mother_mobile")
             whatsapp_sent = False
             if new_number:
-                clean_num = "".join(filter(str.isdigit, str(new_number)))
-                if len(clean_num) >= 10:
+                normalized_num = normalize_phone_number(new_number)
+                if normalized_num:
                     # Update QuizSubmission whatsapp_number as well to keep them in sync
                     if updated_app.submission:
-                        updated_app.submission.whatsapp_number = clean_num
+                        updated_app.submission.whatsapp_number = normalized_num
                         updated_app.submission.save(update_fields=['whatsapp_number'])
 
-                    res = send_whatsapp_template_message(clean_num, updated_app.submission_id)
+                    res = send_whatsapp_template_message(normalized_num, updated_app.submission_id)
                     if res.get("success"):
                         whatsapp_sent = True
                         if updated_app.submission:
                             updated_app.submission.whatsapp_link_sent = True
                             updated_app.submission.save(update_fields=['whatsapp_link_sent'])
-                        logger.info(f"[PATCH /api/admission-form/] Resent WhatsApp to {clean_num} for submission {updated_app.submission_id}!")
+                        logger.info(f"[PATCH /api/admission-form/] Resent WhatsApp to {normalized_num} for submission {updated_app.submission_id}!")
 
             return Response({
                 "status": "success",
