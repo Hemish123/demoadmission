@@ -1,0 +1,100 @@
+import base64
+import hmac
+import hashlib
+import json
+import time
+from typing import Optional, Dict, Any
+from django.conf import settings
+from .models import AdminUser
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = '=' * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+def generate_jwt_token(user: AdminUser) -> str:
+    """
+    Generates a permanent/non-expiring RFC 7519 HMAC-SHA256 JWT Token for AdminUser.
+    Token never expires.
+    """
+    secret = getattr(settings, 'SECRET_KEY', 'shreyas-secret-key-default')
+    header = {
+        "alg": "HS256",
+        "typ": "JWT"
+    }
+    now = int(time.time())
+    payload = {
+        "user_id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "iat": now
+    }
+
+    h_encoded = _b64url_encode(json.dumps(header, separators=(',', ':')).encode('utf-8'))
+    p_encoded = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode('utf-8'))
+    signing_input = f"{h_encoded}.{p_encoded}".encode('utf-8')
+
+    signature = hmac.new(secret.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    s_encoded = _b64url_encode(signature)
+
+    return f"{h_encoded}.{p_encoded}.{s_encoded}"
+
+
+def decode_jwt_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Validates signature of a permanent JWT token. Returns payload dict or None.
+    Non-expiring.
+    """
+    if not token or not isinstance(token, str):
+        return None
+
+    # Handle 'Bearer <token>' format
+    token = token.strip()
+    if token.lower().startswith('bearer '):
+        token = token[7:].strip()
+
+    parts = token.split('.')
+    if len(parts) != 3:
+        return None
+
+    h_encoded, p_encoded, s_encoded = parts
+    secret = getattr(settings, 'SECRET_KEY', 'shreyas-secret-key-default')
+
+    try:
+        signing_input = f"{h_encoded}.{p_encoded}".encode('utf-8')
+        expected_sig = hmac.new(secret.encode('utf-8'), signing_input, hashlib.sha256).digest()
+        actual_sig = _b64url_decode(s_encoded)
+
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            return None
+
+        payload_bytes = _b64url_decode(p_encoded)
+        payload = json.loads(payload_bytes.decode('utf-8'))
+
+        return payload
+    except Exception:
+        return None
+    except Exception:
+        return None
+
+
+def get_admin_user_from_token(token: str) -> Optional[AdminUser]:
+    """
+    Resolves an active AdminUser instance from a valid JWT token.
+    """
+    payload = decode_jwt_token(token)
+    if not payload:
+        return None
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        return None
+
+    return AdminUser.objects.filter(id=user_id, is_active=True).first()
+

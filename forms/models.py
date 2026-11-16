@@ -1,6 +1,28 @@
 from django.db import models
 
 class QuizSubmission(models.Model):
+    STANDARD_CHOICES = [
+        ('Nursery', 'Nursery'),
+        ('Jr.KG', 'Jr.KG'),
+        ('Sr.KG', 'Sr.KG'),
+        ('1', 'Standard 1'),
+        ('2', 'Standard 2'),
+        ('3', 'Standard 3'),
+        ('4', 'Standard 4'),
+        ('5', 'Standard 5'),
+        ('6', 'Standard 6'),
+        ('7', 'Standard 7'),
+        ('8', 'Standard 8'),
+        ('9', 'Standard 9'),
+        ('10', 'Standard 10'),
+        ('11-Science', 'Standard 11 (Science)'),
+        ('11-Commerce', 'Standard 11 (Commerce)'),
+        ('11-Arts', 'Standard 11 (Arts)'),
+        ('12-Science', 'Standard 12 (Science)'),
+        ('12-Commerce', 'Standard 12 (Commerce)'),
+        ('12-Arts', 'Standard 12 (Arts)'),
+    ]
+
     VIBHAG_CHOICES = [
         ('Shishu', 'Shishu (શિશુ)'),
         ('Arun', 'Arun (અરુણ)'),
@@ -8,15 +30,29 @@ class QuizSubmission(models.Model):
         ('Kishore', 'Kishore (કિશોર)'),
     ]
 
-    parent_name = models.CharField(max_length=255, blank=True)
-    child_name = models.CharField(max_length=255, blank=True)
+    standard = models.CharField(
+        max_length=50,
+        choices=STANDARD_CHOICES,
+        default='Nursery',
+        help_text="Standard (Nursery to 12)"
+    )
+    medium = models.CharField(
+        max_length=20,
+        choices=[('Gujarati', 'Gujarati'), ('English', 'English')],
+        default='Gujarati',
+        help_text="Medium of Instruction (Gujarati / English)"
+    )
+
+    parent_name = models.CharField(max_length=255, blank=True, help_text="Parent Name / Father Name")
+    child_name = models.CharField(max_length=255, blank=True, help_text="Student Name")
+    surname = models.CharField(max_length=100, blank=True, help_text="SURNAME (Mandatory)")
     whatsapp_number = models.CharField(max_length=20, blank=True, help_text="WhatsApp number to receive the form link")
     email = models.EmailField(blank=True, help_text="User email address")
     vibhag = models.CharField(
         max_length=20,
         choices=VIBHAG_CHOICES,
         default='Shishu',
-        help_text="Vibhag: Shishu / Arun / Kesari / Kishore (Fixed)"
+        help_text="Vibhag: Shishu / Arun / Kesari / Kishore"
     )
     language = models.CharField(
         max_length=10,
@@ -43,6 +79,7 @@ class QuizSubmission(models.Model):
     )
     payment_transaction_id = models.CharField(max_length=100, blank=True)
     whatsapp_link_sent = models.BooleanField(default=False)
+    quiz_completed_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when parent completed the quiz")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -59,6 +96,8 @@ class AdmissionApplication(models.Model):
     )
     application_number = models.CharField(max_length=50, unique=True, blank=True)
     date = models.DateField(null=True, blank=True)
+    standard = models.CharField(max_length=50, blank=True, default='Nursery')
+    medium = models.CharField(max_length=20, blank=True, default='Gujarati')
     vibhag = models.CharField(
         max_length=20,
         choices=QuizSubmission.VIBHAG_CHOICES,
@@ -177,6 +216,7 @@ class AdmissionApplication(models.Model):
         help_text="Consent to adhere to Shreyas rules and regulations"
     )
     terms_agreed_date = models.DateField(null=True, blank=True)
+    terms_agreed_timestamp = models.DateTimeField(null=True, blank=True, help_text="Timestamp when terms & conditions were accepted")
     mother_signature = models.ImageField(upload_to='signatures/mother/', null=True, blank=True)
     father_signature = models.ImageField(upload_to='signatures/father/', null=True, blank=True)
     guardian_signature = models.ImageField(upload_to='signatures/guardian/', null=True, blank=True)
@@ -189,7 +229,10 @@ class AdmissionApplication(models.Model):
     child_aadhar_card = models.FileField(upload_to='documents/child_aadhar/', null=True, blank=True, help_text="Child's Aadhar Card Photo Copy")
     caste_certificate = models.FileField(upload_to='documents/caste_certificates/', null=True, blank=True, help_text="Caste Certificate (if applicable) Photo Copy")
     parent_aadhar_card = models.FileField(upload_to='documents/parent_aadhar/', null=True, blank=True, help_text="Parent's Aadhar Card Photo Copy")
+    previous_report_card = models.FileField(upload_to='documents/report_cards/', null=True, blank=True, help_text="Previous year's report card (For non-nursery applicants)")
+    alak_malak_certificate = models.FileField(upload_to='documents/alak_malak/', null=True, blank=True, help_text="Alak Malak Certificate (For Nursery applicants)")
 
+    form_submitted_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when complete admission form was submitted")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
@@ -200,3 +243,69 @@ class AdmissionApplication(models.Model):
 
     def __str__(self):
         return f"{self.application_number} - {self.child_first_name} {self.child_surname}"
+
+
+class AdminUser(models.Model):
+    """
+    Flow A: Step 1 & 2
+    Admin User with secure PIN and Role-based access.
+    """
+    ROLE_CHOICES = [
+        ('ADMIN', 'Admin'),
+        ('STAFF', 'Staff'),
+        ('ACADEMICIAN', 'Academician'),
+    ]
+
+    username = models.CharField(max_length=100, unique=True, help_text="e.g. admin.shreyas")
+    full_name = models.CharField(max_length=200, blank=True)
+    email = models.EmailField(unique=True, help_text="Registered email for Forgot PIN OTP")
+    pin_hash = models.CharField(max_length=256, help_text="Hashed PIN")
+    role = models.CharField(max_length=30, choices=ROLE_CHOICES, default='ADMIN')
+    is_active = models.BooleanField(default=True)
+    
+    # Forgot PIN OTP support
+    otp_code = models.CharField(max_length=10, blank=True, null=True)
+    otp_expires_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def set_pin(self, raw_pin: str):
+        from django.contrib.auth.hashers import make_password
+        self.pin_hash = make_password(str(raw_pin))
+
+    def check_pin(self, raw_pin: str) -> bool:
+        from django.contrib.auth.hashers import check_password
+        return check_password(str(raw_pin), self.pin_hash)
+
+    def __str__(self):
+        return f"{self.username} ({self.role})"
+
+
+class AuditLog(models.Model):
+    """
+    Audit log capturing API actions across the system.
+    Only accessible by Admin.
+    """
+    actor_username = models.CharField(max_length=150, blank=True, default="Anonymous")
+    actor_email = models.CharField(max_length=150, blank=True, default="")
+    actor_role = models.CharField(max_length=50, blank=True, default="GUEST")
+    
+    method = models.CharField(max_length=10)  # GET, POST, PATCH, DELETE
+    endpoint = models.CharField(max_length=255)
+    query_params = models.TextField(blank=True, default="")
+    request_body = models.TextField(blank=True, default="")
+    
+    response_status = models.IntegerField(default=200)
+    ip_address = models.CharField(max_length=50, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.created_at}] {self.actor_username} ({self.actor_role}) - {self.method} {self.endpoint} [{self.response_status}]"
+
+

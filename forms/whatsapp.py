@@ -1,4 +1,5 @@
 import re
+import os
 import requests
 import urllib.parse
 import logging
@@ -58,7 +59,7 @@ def send_whatsapp_message(phone_number: str, message: str, gateway: str = "mock"
     }
 
 
-def send_whatsapp_template_message(recipient_number: str, submission_id: int):
+def send_whatsapp_template_message(recipient_number: str, submission_id: int, template_name: str = "shreyas_admission"):
     """
     Sends WhatsApp message using Meta Approved Template 'shreyas_admission'
     with Dynamic Button URL containing submission_id.
@@ -86,7 +87,7 @@ def send_whatsapp_template_message(recipient_number: str, submission_id: int):
         "to": clean_phone,
         "type": "template",
         "template": {
-            "name": "shreyas_admission",
+            "name": template_name,
             "language": {
                 "code": "en"
             },
@@ -108,8 +109,12 @@ def send_whatsapp_template_message(recipient_number: str, submission_id: int):
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
-        res_data = response.json()
-        logger.info(f"WhatsApp Template response for {clean_phone}: {res_data}")
+        try:
+            res_data = response.json()
+        except Exception:
+            res_data = response.text
+
+        logger.info(f"WhatsApp Template response for {clean_phone}: status {response.status_code} - {res_data}")
 
         if response.status_code == 200:
             return {"success": True, "data": res_data, "recipient": clean_phone}
@@ -119,3 +124,122 @@ def send_whatsapp_template_message(recipient_number: str, submission_id: int):
     except Exception as e:
         logger.error(f"WhatsApp sending exception: {str(e)}")
         return {"success": False, "error": str(e), "recipient": clean_phone}
+
+
+def send_whatsapp_booklet_template(recipient_number: str, language: str = "gu", pdf_url: str = None) -> dict:
+    """
+    Sends WhatsApp message with school Booklet PDF attachment via Meta Approved Template:
+    - English: 'shreyas_booklet_en'
+    - Gujarati: 'shreyas_booklet_gu'
+    Header: Document PDF attachment.
+    """
+    clean_phone = normalize_phone_number(recipient_number)
+    phone_number_id = getattr(settings, 'WHATSAPP_PHONE_NUMBER_ID', '')
+    access_token = getattr(settings, 'WHATSAPP_ACCESS_TOKEN', '')
+
+    if not phone_number_id or not access_token:
+        logger.warning("WhatsApp credentials not set in .env")
+        return {"success": False, "error": "WhatsApp credentials not set in .env"}
+
+    is_gujarati = str(language or '').lower().startswith('gu')
+    template_name = "shreyas_booklet_gu" if is_gujarati else "shreyas_booklet_en"
+
+    # Load booklet PDF url directly from .env (with fallback)
+    if not pdf_url:
+        if is_gujarati:
+            pdf_url = os.getenv(
+                'BOOKLET_PDF_URL_GU',
+                'https://shreyasfoundation.blob.core.windows.net/media/documents/health_certificates/04_-_Shreyas_Booklet_Gujarati_-_Final_28.10.2026.pdf'
+            )
+        else:
+            pdf_url = os.getenv(
+                'BOOKLET_PDF_URL_EN',
+                'https://shreyasfoundation.blob.core.windows.net/media/documents/caste_certificates/02_-_Shreyas_Booklet_English_-_Final_28.10.2026.pdf'
+            )
+
+    file_name = "Shreyas_Booklet_Gujarati.pdf" if is_gujarati else "Shreyas_Booklet_English.pdf"
+
+    url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    # Meta Document Template Payload
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": clean_phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {
+                "code": "en"  # In Meta templates screenshot, Language is selected as English
+            },
+            "components": [
+                {
+                    "type": "header",
+                    "parameters": [
+                        {
+                            "type": "document",
+                            "document": {
+                                "link": pdf_url,
+                                "filename": file_name
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+    try:
+        logger.info(f"Sending WhatsApp Booklet Template '{template_name}' with PDF '{file_name}' to {clean_phone}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        try:
+            res_data = response.json()
+        except Exception:
+            res_data = response.text
+
+        logger.info(f"WhatsApp Booklet Template response for {clean_phone}: status {response.status_code} - {res_data}")
+
+        if response.status_code == 200:
+            return {"success": True, "template": template_name, "data": res_data, "recipient": clean_phone}
+        else:
+            logger.error(f"WhatsApp Booklet Template failed for {clean_phone}: {res_data}")
+            return {"success": False, "template": template_name, "error": res_data, "recipient": clean_phone}
+    except Exception as e:
+        logger.error(f"WhatsApp Booklet Template exception: {str(e)}")
+        return {"success": False, "template": template_name, "error": str(e), "recipient": clean_phone}
+
+
+def send_payment_received_whatsapp_notifications(recipient_number: str, submission_id: int, language: str = "gu") -> dict:
+    """
+    Sends BOTH WhatsApp messages upon payment receipt:
+    1. School Booklet PDF Template FIRST ('shreyas_booklet_gu' or 'shreyas_booklet_en' based on chosen language).
+    2. Admission Form Link Template SECOND ('shreyas_admission') with dynamic button link.
+    """
+    clean_phone = normalize_phone_number(recipient_number)
+    logger.info(f"[WHATSAPP DISPATCH] Triggering Booklet PDF first, followed by Form Link for {clean_phone} (Language: {language}, ID: {submission_id})...")
+
+    # 1. School Booklet PDF Message (shreyas_booklet_gu / shreyas_booklet_en) - SENT FIRST
+    booklet_result = send_whatsapp_booklet_template(clean_phone, language=language)
+
+    # Slight pause to ensure Meta orders and delivers the Booklet message before the Link message
+    try:
+        import time
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+    # 2. Admission Form Link Message (shreyas_admission) - SENT SECOND
+    link_result = send_whatsapp_template_message(clean_phone, submission_id, template_name="shreyas_admission")
+
+    return {
+        "booklet_sent": booklet_result.get("success", False),
+        "link_sent": link_result.get("success", False),
+        "booklet_result": booklet_result,
+        "link_result": link_result,
+        "overall_success": bool(link_result.get("success") or booklet_result.get("success"))
+    }
+
