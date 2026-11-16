@@ -1974,24 +1974,46 @@ class AdminMeritBoardView(APIView):
         from .evaluation_service import recompute_merit_rank_and_cutoff
         from .serializers import MeritRankBoardSerializer
 
-        standard = (request.query_params.get("standard") or "1").strip()
-        medium = (request.query_params.get("medium") or "Gujarati").strip()
+        standard = (request.query_params.get("standard") or "").strip()
+        medium = (request.query_params.get("medium") or "").strip()
         cutoff_seats = int(request.query_params.get("cutoff") or 80)
         recompute = request.query_params.get("recompute", "true").lower() in ["true", "1", "yes"]
 
-        if recompute:
-            summary = recompute_merit_rank_and_cutoff(standard=standard, medium=medium, cutoff_seats=cutoff_seats)
+        # If specific standard and medium provided, recompute for that slice
+        if standard and medium and not standard.lower().startswith("all") and not medium.lower().startswith("all"):
+            if recompute:
+                summary = recompute_merit_rank_and_cutoff(standard=standard, medium=medium, cutoff_seats=cutoff_seats)
+            else:
+                summary = {
+                    "standard": standard,
+                    "medium": medium,
+                    "cutoff_seats": cutoff_seats
+                }
+            ranked_apps = AdmissionApplication.objects.filter(
+                standard__iexact=standard,
+                medium__iexact=medium
+            ).exclude(admission_status__in=['CANCELLED', 'REJECTED']).order_by('merit_rank', '-final_aggregate_score')
         else:
+            # If "All Standards" or "All Mediums" is selected, rank across all standard x medium pairs
+            all_pairs = AdmissionApplication.objects.values_list('standard', 'medium').distinct()
+            summaries = []
+            for std_val, med_val in all_pairs:
+                if std_val and med_val:
+                    s = recompute_merit_rank_and_cutoff(standard=std_val, medium=med_val, cutoff_seats=cutoff_seats)
+                    summaries.append(s)
+            
+            ranked_apps = AdmissionApplication.objects.exclude(
+                admission_status__in=['CANCELLED', 'REJECTED']
+            ).order_by('standard', 'medium', 'merit_rank', '-final_aggregate_score')
+
             summary = {
-                "standard": standard,
-                "medium": medium,
+                "standard": standard or "All Standards",
+                "medium": medium or "All Mediums",
+                "total_ranked": ranked_apps.count(),
+                "selected_seats": ranked_apps.filter(admission_status='SELECTED').count(),
+                "waitlisted": ranked_apps.filter(admission_status='WAITLISTED').count(),
                 "cutoff_seats": cutoff_seats
             }
-
-        ranked_apps = AdmissionApplication.objects.filter(
-            standard__iexact=standard,
-            medium__iexact=medium
-        ).order_by('merit_rank', '-final_aggregate_score')
 
         serializer = MeritRankBoardSerializer(ranked_apps, many=True)
 

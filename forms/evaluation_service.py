@@ -44,7 +44,7 @@ def calculate_part_x_score(application: AdmissionApplication, save: bool = True)
         mcq_score = float(min(application.submission.score, 7))
     application.mcq_score_part_x = mcq_score
 
-    # 3. Sibling VK benefit (+3 marks or 0)
+    # 3. Sibling VK benefit (+3 marks as per official chart, or 0)
     sibling_score = 0.0
     has_receipt = bool(
         application.sibling_vikas_kendra_1_receipt or
