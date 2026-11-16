@@ -1997,14 +1997,22 @@ class AdminMeritBoardView(APIView):
             # If "All Standards" or "All Mediums" is selected, rank across all standard x medium pairs
             all_pairs = AdmissionApplication.objects.values_list('standard', 'medium').distinct()
             summaries = []
-            for std_val, med_val in all_pairs:
-                if std_val and med_val:
-                    s = recompute_merit_rank_and_cutoff(standard=std_val, medium=med_val, cutoff_seats=cutoff_seats)
-                    summaries.append(s)
+            if recompute:
+                # Rank candidates dynamically by score descending
+                for std_val, med_val in all_pairs:
+                    if std_val and med_val:
+                        s = recompute_merit_rank_and_cutoff(standard=std_val, medium=med_val, cutoff_seats=cutoff_seats)
+                        summaries.append(s)
             
             ranked_apps = AdmissionApplication.objects.exclude(
                 admission_status__in=['CANCELLED', 'REJECTED']
-            ).order_by('standard', 'medium', 'merit_rank', '-final_aggregate_score')
+            ).order_by('-final_aggregate_score', 'merit_rank', 'created_at')
+
+            # Populate cross-cutting merit ranks if viewing All Standards
+            assigned_rank = 1
+            for app_obj in ranked_apps:
+                app_obj.merit_rank = assigned_rank
+                assigned_rank += 1
 
             summary = {
                 "standard": standard or "All Standards",
