@@ -79,11 +79,20 @@ class QuizSubmission(models.Model):
     )
     payment_transaction_id = models.CharField(max_length=100, blank=True)
     whatsapp_link_sent = models.BooleanField(default=False)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when one-time 7:00 AM WhatsApp reminder was sent")
     quiz_completed_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when parent completed the quiz")
+    created_by = models.ForeignKey(
+        'AdminUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_enquiries",
+        help_text="Admin/Staff user who added this enquiry"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.parent_name or 'Anonymous'} ({self.vibhag}) - Score: {self.score}/7 ({self.tag}) - Pay: {self.payment_status}"
+        return f"[ID: #{self.id}] {self.child_name or self.parent_name or 'Anonymous'} ({self.vibhag}) - Score: {self.score}/7 ({self.tag}) - Pay: {self.payment_status}"
 
 
 class AdmissionApplication(models.Model):
@@ -231,6 +240,13 @@ class AdmissionApplication(models.Model):
     parent_aadhar_card = models.FileField(upload_to='documents/parent_aadhar/', null=True, blank=True, help_text="Parent's Aadhar Card Photo Copy")
     previous_report_card = models.FileField(upload_to='documents/report_cards/', null=True, blank=True, help_text="Previous year's report card (For non-nursery applicants)")
     alak_malak_certificate = models.FileField(upload_to='documents/alak_malak/', null=True, blank=True, help_text="Alak Malak Certificate (For Nursery applicants)")
+
+    # Interaction Slot Details (Auto allocated: 10 children/slot, 4 slots/day, Mon-Sat)
+    interaction_date = models.DateField(null=True, blank=True, help_text="Scheduled interaction date")
+    interaction_slot_no = models.IntegerField(null=True, blank=True, help_text="Slot number (1 to 4)")
+    interaction_time = models.CharField(max_length=50, blank=True, help_text="e.g. 9:00 AM TO 10:00 AM")
+    interaction_venue = models.CharField(max_length=150, default="Shreyas Foundation – Main Office", blank=True)
+    interaction_whatsapp_sent = models.BooleanField(default=False)
 
     form_submitted_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when complete admission form was submitted")
     created_at = models.DateTimeField(auto_now_add=True)

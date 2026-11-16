@@ -6,19 +6,30 @@ from .views import (
     AdmissionApplicationView,
     AdminUserManagementView,
     AdminLoginView,
+    AdminVerifyLoginOTPView,
     ForgotPinRequestOTPView,
     ForgotPinVerifyAndResetView,
+    AdminInteractionCalendarView,
+    AdminExportDataView,
     AdminAuditLogView
 )
 
 urlpatterns = [
-    # Admin User Management (Admin adds staff/users role-wise)
+    # Admin User Management (Admin adds/edits/deletes staff/users role-wise)
     path('admin/users/', AdminUserManagementView.as_view(), name='admin-users'),
+    path('admin/users/<int:user_id>/', AdminUserManagementView.as_view(), name='admin-user-detail'),
 
-    # Admin Login (Staff/Admin logs in with email + PIN)
+    # Admin Login (2-Step Verification)
     path('admin/login/', AdminLoginView.as_view(), name='admin-login'),
+    path('admin/verify-login-otp/', AdminVerifyLoginOTPView.as_view(), name='admin-verify-login-otp'),
     path('admin/forgot-pin/request-otp/', ForgotPinRequestOTPView.as_view(), name='admin-forgot-pin-otp'),
     path('admin/forgot-pin/reset/', ForgotPinVerifyAndResetView.as_view(), name='admin-forgot-pin-reset'),
+
+    # Step 8: Interaction Calendar for Admin
+    path('admin/interaction-calendar/', AdminInteractionCalendarView.as_view(), name='admin-interaction-calendar'),
+
+    # Export Data API (Excel & CSV for Enquiries, Submitted Apps, Pending Forms)
+    path('admin/export/', AdminExportDataView.as_view(), name='admin-export'),
 
     # Admin Audit Logs (Only accessible by Admin)
     path('admin/audit-logs/', AdminAuditLogView.as_view(), name='admin-audit-logs'),

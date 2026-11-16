@@ -6,6 +6,8 @@ class QuizSubmissionListSerializer(serializers.ModelSerializer):
     application_number = serializers.SerializerMethodField()
     is_repeated_enquiry = serializers.SerializerMethodField()
     repeated_badge = serializers.SerializerMethodField()
+    created_by_user = serializers.SerializerMethodField()
+    added_by = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizSubmission
@@ -31,8 +33,27 @@ class QuizSubmissionListSerializer(serializers.ModelSerializer):
             'admission_submitted',
             'application_number',
             'is_repeated_enquiry',
-            'repeated_badge'
+            'repeated_badge',
+            'created_by',
+            'created_by_user',
+            'added_by'
         ]
+
+    def get_created_by_user(self, obj):
+        if obj.created_by:
+            return {
+                "id": obj.created_by.id,
+                "username": obj.created_by.username,
+                "full_name": obj.created_by.full_name or obj.created_by.username,
+                "email": obj.created_by.email,
+                "role": obj.created_by.role
+            }
+        return None
+
+    def get_added_by(self, obj):
+        if obj.created_by:
+            return obj.created_by.full_name or obj.created_by.username
+        return "Online / Self"
 
     def get_admission_submitted(self, obj):
         return hasattr(obj, 'admission_application')
@@ -191,11 +212,30 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
     submission_id = serializers.IntegerField(write_only=True, required=False)
     child_first_name = serializers.CharField(required=False, allow_blank=True)
     vibhag = serializers.CharField(required=False, allow_blank=True)
+    added_by = serializers.SerializerMethodField()
+    created_by_user = serializers.SerializerMethodField()
 
     class Meta:
         model = AdmissionApplication
         fields = '__all__'
         read_only_fields = ('application_number', 'created_at')
+
+    def get_added_by(self, obj):
+        if obj.submission and obj.submission.created_by:
+            return obj.submission.created_by.full_name or obj.submission.created_by.username
+        return "Online / Self"
+
+    def get_created_by_user(self, obj):
+        if obj.submission and obj.submission.created_by:
+            u = obj.submission.created_by
+            return {
+                "id": u.id,
+                "username": u.username,
+                "full_name": u.full_name or u.username,
+                "email": u.email,
+                "role": u.role
+            }
+        return None
 
     def validate(self, attrs):
         is_admin_update = self.context.get('is_admin_update', False)
@@ -229,6 +269,22 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             if not attrs.get('health_certificate'):
                 raise serializers.ValidationError({
                     "health_certificate": "The doctor's certificate and health report must be uploaded."
+                })
+
+            # Mandatory Documents Validation: Child Aadhar, Parent Aadhar, and Birth Certificate
+            if not attrs.get('child_aadhar_card'):
+                raise serializers.ValidationError({
+                    "child_aadhar_card": "Child's Aadhar Card is compulsory and must be uploaded."
+                })
+
+            if not attrs.get('parent_aadhar_card'):
+                raise serializers.ValidationError({
+                    "parent_aadhar_card": "Parent's Aadhar Card is compulsory and must be uploaded."
+                })
+
+            if not attrs.get('birth_certificate'):
+                raise serializers.ValidationError({
+                    "birth_certificate": "Birth Certificate is compulsory and must be uploaded."
                 })
 
             # Previous year report card vs Alak Malak Certificate check based on vibhag

@@ -61,7 +61,7 @@ def send_whatsapp_message(phone_number: str, message: str, gateway: str = "mock"
 
 def send_whatsapp_template_message(recipient_number: str, submission_id: int, template_name: str = "shreyas_admission"):
     """
-    Sends WhatsApp message using Meta Approved Template 'shreyas_admission'
+    Sends WhatsApp message using Meta Approved Template ('shreyas_admission' or 'shreyas_admission_reminder')
     with Dynamic Button URL containing submission_id.
     """
     clean_phone = normalize_phone_number(recipient_number)
@@ -79,7 +79,7 @@ def send_whatsapp_template_message(recipient_number: str, submission_id: int, te
         "Content-Type": "application/json"
     }
 
-    # Payload matching your exact template: shreyas_admission
+    # Payload matching Meta template button URL:
     # Dynamic button parameter: submission_id (e.g. "1")
     payload = {
         "messaging_product": "whatsapp",
@@ -114,16 +114,16 @@ def send_whatsapp_template_message(recipient_number: str, submission_id: int, te
         except Exception:
             res_data = response.text
 
-        logger.info(f"WhatsApp Template response for {clean_phone}: status {response.status_code} - {res_data}")
+        logger.info(f"WhatsApp Template '{template_name}' response for {clean_phone}: status {response.status_code} - {res_data}")
 
         if response.status_code == 200:
-            return {"success": True, "data": res_data, "recipient": clean_phone}
+            return {"success": True, "template": template_name, "data": res_data, "recipient": clean_phone}
         else:
-            logger.error(f"WhatsApp Template message failed for {clean_phone}: {res_data}")
-            return {"success": False, "error": res_data, "recipient": clean_phone}
+            logger.error(f"WhatsApp Template '{template_name}' failed for {clean_phone}: {res_data}")
+            return {"success": False, "template": template_name, "error": res_data, "recipient": clean_phone}
     except Exception as e:
         logger.error(f"WhatsApp sending exception: {str(e)}")
-        return {"success": False, "error": str(e), "recipient": clean_phone}
+        return {"success": False, "template": template_name, "error": str(e), "recipient": clean_phone}
 
 
 def send_whatsapp_booklet_template(recipient_number: str, language: str = "gu", pdf_url: str = None) -> dict:
@@ -242,4 +242,78 @@ def send_payment_received_whatsapp_notifications(recipient_number: str, submissi
         "link_result": link_result,
         "overall_success": bool(link_result.get("success") or booklet_result.get("success"))
     }
+
+
+def send_whatsapp_interaction_scheduled_message(
+    recipient_number: str,
+    date_str: str,
+    slot_no: int,
+    time_str: str,
+    template_name: str = "shreyas_interaction_scheduled"
+) -> dict:
+    """
+    Sends WhatsApp notification to parents upon Admission Form submission
+    with their scheduled Interaction Date, Slot No, and Time.
+
+    Template parameters:
+    {{1}} = Date (e.g. "17-11-2026")
+    {{2}} = Slot No (e.g. "Slot 1")
+    {{3}} = Time (e.g. "9:00 AM TO 10:00 AM")
+    """
+    clean_phone = normalize_phone_number(recipient_number)
+    phone_number_id = getattr(settings, 'WHATSAPP_PHONE_NUMBER_ID', '')
+    access_token = getattr(settings, 'WHATSAPP_ACCESS_TOKEN', '')
+
+    if not phone_number_id or not access_token:
+        logger.warning("WhatsApp credentials not set in .env")
+        return {"success": False, "error": "WhatsApp credentials not set in .env"}
+
+    url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": clean_phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {
+                "code": "en"
+            },
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": str(date_str)},
+                        {"type": "text", "text": f"Slot {slot_no}"},
+                        {"type": "text", "text": str(time_str)}
+                    ]
+                }
+            ]
+        }
+    }
+
+    try:
+        logger.info(f"[INTERACTION NOTIF] Sending template '{template_name}' to {clean_phone} (Date: {date_str}, Slot: {slot_no}, Time: {time_str})...")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        try:
+            res_data = response.json()
+        except Exception:
+            res_data = response.text
+
+        logger.info(f"Interaction WhatsApp response for {clean_phone}: status {response.status_code} - {res_data}")
+
+        if response.status_code == 200:
+            return {"success": True, "template": template_name, "data": res_data, "recipient": clean_phone}
+        else:
+            logger.error(f"Interaction WhatsApp message failed for {clean_phone}: {res_data}")
+            return {"success": False, "template": template_name, "error": res_data, "recipient": clean_phone}
+    except Exception as e:
+        logger.error(f"Interaction WhatsApp exception: {str(e)}")
+        return {"success": False, "template": template_name, "error": str(e), "recipient": clean_phone}
+
 

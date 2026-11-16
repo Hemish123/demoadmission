@@ -98,7 +98,7 @@ def enforce_admin_token(request, required_role: Optional[str] = None):
 
 class AdminLoginView(APIView):
     """
-    Flow A: Step 1 - Secure Login with Email / Username + PIN
+    Two-Step Verification: Step 1 - Verify Username/Email & PIN, then send OTP to registered email.
     POST /api/admin/login/
     Body: {"email": "admin@shreyasfoundation.in", "pin": "1234"}
     """
@@ -123,11 +123,107 @@ class AdminLoginView(APIView):
                 "message": "Invalid email/username or PIN."
             }, status=status.HTTP_401_UNAUTHORIZED)
 
+        # Generate 6-digit OTP for 2-step verification
+        otp = f"{random.randint(100000, 999999)}"
+        admin_user.otp_code = otp
+        admin_user.otp_expires_at = timezone.now() + timedelta(minutes=10)
+        admin_user.save(update_fields=['otp_code', 'otp_expires_at'])
+
+        subject = "Shreyas Foundation Admin - 2-Step Verification Login OTP"
+        body = (
+            f"Namaste {admin_user.full_name or admin_user.username},\n\n"
+            f"Your 2-Step Verification OTP for logging into Shreyas Foundation Portal is: {otp}\n\n"
+            f"If you did not attempt this login, please contact technical support immediately.\n\n"
+            f"Shreyas Foundation Technical Team"
+        )
+        try:
+            from .email_service import generate_otp_email_html
+            sender = getattr(settings, 'DEFAULT_FROM_EMAIL', 'JMS Tech Solution <anand@jmstech.co>')
+            html_message = generate_otp_email_html(
+                recipient_name=admin_user.full_name or admin_user.username,
+                otp_code=otp,
+                purpose="login"
+            )
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email=sender,
+                recipient_list=[admin_user.email],
+                html_message=html_message,
+                fail_silently=True
+            )
+            logger.info(f"2-Step verification OTP sent to {admin_user.email}")
+        except Exception as e:
+            logger.error(f"Failed to send 2-Step verification email OTP: {e}")
+
+        # Mask email for privacy (e.g. pr***11@gmail.com)
+        email_parts = admin_user.email.split('@')
+        if len(email_parts) == 2 and len(email_parts[0]) > 2:
+            masked_email = f"{email_parts[0][:2]}***{email_parts[0][-2:]}@{email_parts[1]}"
+        else:
+            masked_email = admin_user.email
+
+        return Response({
+            "status": "otp_required",
+            "message": f"Credentials verified. 2-Step verification OTP has been sent to your email ({masked_email}).",
+            "email": admin_user.email,
+            "masked_email": masked_email,
+            **({"debug_otp": otp} if settings.DEBUG else {})
+        }, status=status.HTTP_200_OK)
+
+
+class AdminVerifyLoginOTPView(APIView):
+    """
+    Two-Step Verification: Step 2 - Verify OTP & complete login, returns JWT permanent token.
+    POST /api/admin/verify-login-otp/
+    Body: {"email": "admin@shreyasfoundation.in", "otp": "123456"}
+    """
+    def post(self, request):
+        identifier = (request.data.get("email") or request.data.get("username") or "").strip()
+        otp = str(request.data.get("otp", "")).strip()
+
+        if not identifier or not otp:
+            return Response({
+                "status": "error",
+                "message": "Email/Username and OTP are required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        admin_user = AdminUser.objects.filter(
+            Q(email__iexact=identifier) | Q(username__iexact=identifier),
+            is_active=True
+        ).first()
+
+        if not admin_user:
+            return Response({
+                "status": "error",
+                "message": "Admin user not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if not admin_user.otp_code or admin_user.otp_code != otp:
+            return Response({
+                "status": "error",
+                "message": "Invalid OTP code. Please check your email and try again."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if admin_user.otp_expires_at and admin_user.otp_expires_at < timezone.now():
+            return Response({
+                "status": "error",
+                "message": "OTP has expired. Please log in again to receive a fresh OTP."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Clear OTP after successful verification
+        admin_user.otp_code = None
+        admin_user.otp_expires_at = None
+        admin_user.save(update_fields=['otp_code', 'otp_expires_at'])
+
+        # Generate permanent JWT token
         token = generate_jwt_token(admin_user)
+
+        logger.info(f"Admin 2-Step login successful for {admin_user.username} ({admin_user.email})")
 
         return Response({
             "status": "success",
-            "message": "Login successful.",
+            "message": "2-Step verification successful. Login completed.",
             "token": token,
             "token_type": "Bearer",
             "is_permanent": True,
@@ -143,14 +239,33 @@ class AdminLoginView(APIView):
 
 class AdminUserManagementView(APIView):
     """
-    User Management: Only Admin can create and list staff/academician users.
-    POST /api/admin/users/ - Create new user (Role: ADMIN / STAFF / ACADEMICIAN)
-    GET  /api/admin/users/ - List all users
+    User Management: Only Admin can create, list, edit (PUT/PATCH), and delete users.
+    GET    /api/admin/users/             - List all users or get single user (?id=...)
+    POST   /api/admin/users/             - Create new user (Role: ADMIN / STAFF / ACADEMICIAN)
+    PATCH  /api/admin/users/?id=<id>     - Edit user details (full_name, email, role, is_active, pin)
+    DELETE /api/admin/users/?id=<id>     - Delete a user (Cannot delete yourself)
     """
-    def get(self, request):
+    def get(self, request, user_id=None):
         denied = enforce_admin_token(request, required_role='ADMIN')
         if denied:
             return denied
+
+        target_id = user_id or request.query_params.get("id")
+        if target_id:
+            user = get_object_or_404(AdminUser, id=target_id)
+            return Response({
+                "status": "success",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "full_name": user.full_name,
+                    "email": user.email,
+                    "role": user.role,
+                    "is_active": user.is_active,
+                    "created_at": user.created_at,
+                    "updated_at": user.updated_at
+                }
+            }, status=status.HTTP_200_OK)
 
         users = AdminUser.objects.all().order_by('-created_at')
         data = [{
@@ -160,7 +275,8 @@ class AdminUserManagementView(APIView):
             "email": u.email,
             "role": u.role,
             "is_active": u.is_active,
-            "created_at": u.created_at
+            "created_at": u.created_at,
+            "updated_at": u.updated_at
         } for u in users]
         return Response({"status": "success", "count": len(data), "users": data}, status=status.HTTP_200_OK)
 
@@ -229,6 +345,132 @@ class AdminUserManagementView(APIView):
             }
         }, status=status.HTTP_201_CREATED)
 
+    def patch(self, request, user_id=None):
+        """
+        Edit User: Can update full_name, email, role, is_active, and reset PIN.
+        Pass ID in query (?id=...) or in URL path.
+        """
+        denied = enforce_admin_token(request, required_role='ADMIN')
+        if denied:
+            return denied
+
+        target_id = user_id or request.query_params.get("id") or request.data.get("id")
+        if not target_id:
+            return Response({
+                "status": "error",
+                "message": "User ID is required (pass ?id=<id> or in request body)."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        user = AdminUser.objects.filter(id=target_id).first()
+        if not user:
+            return Response({
+                "status": "error",
+                "message": f"AdminUser with id {target_id} does not exist."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if "full_name" in request.data:
+            user.full_name = str(request.data["full_name"]).strip()
+
+        if "email" in request.data:
+            new_email = str(request.data["email"]).strip()
+            if new_email and new_email.lower() != user.email.lower():
+                if AdminUser.objects.filter(email__iexact=new_email).exclude(id=user.id).exists():
+                    return Response({
+                        "status": "error",
+                        "message": f"Email '{new_email}' is already in use by another user."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                user.email = new_email
+
+        if "username" in request.data:
+            new_username = str(request.data["username"]).strip()
+            if new_username and new_username.lower() != user.username.lower():
+                if AdminUser.objects.filter(username__iexact=new_username).exclude(id=user.id).exists():
+                    return Response({
+                        "status": "error",
+                        "message": f"Username '{new_username}' is already in use by another user."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                user.username = new_username
+
+        if "role" in request.data:
+            new_role = str(request.data["role"]).strip().upper()
+            valid_roles = [r[0] for r in AdminUser.ROLE_CHOICES]
+            if new_role in valid_roles:
+                user.role = new_role
+
+        if "is_active" in request.data:
+            val = request.data["is_active"]
+            user.is_active = (val is True or str(val).lower() == 'true')
+
+        if "pin" in request.data and str(request.data["pin"]).strip():
+            new_pin = str(request.data["pin"]).strip()
+            if len(new_pin) < 4:
+                return Response({
+                    "status": "error",
+                    "message": "PIN must be at least 4 digits."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            user.set_pin(new_pin)
+
+        user.save()
+        logger.info(f"Admin updated user {user.id} ({user.username})")
+
+        return Response({
+            "status": "success",
+            "message": f"User '{user.username}' updated successfully.",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "full_name": user.full_name,
+                "email": user.email,
+                "role": user.role,
+                "is_active": user.is_active,
+                "updated_at": user.updated_at
+            }
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, user_id=None):
+        """
+        Delete User: Permanent deletion of a staff/academician/admin user.
+        Pass ID in query (?id=...) or in URL path.
+        Cannot delete the currently logged-in admin user.
+        """
+        denied = enforce_admin_token(request, required_role='ADMIN')
+        if denied:
+            return denied
+
+        _, current_admin, _ = get_authenticated_admin_user(request)
+
+        target_id = user_id or request.query_params.get("id") or request.data.get("id")
+        if not target_id:
+            return Response({
+                "status": "error",
+                "message": "User ID is required to delete (pass ?id=<id> or in request body)."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        user = AdminUser.objects.filter(id=target_id).first()
+        if not user:
+            return Response({
+                "status": "error",
+                "message": f"AdminUser with id {target_id} does not exist."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Prevent admin from deleting themselves
+        if current_admin and current_admin.id == user.id:
+            return Response({
+                "status": "error",
+                "message": "You cannot delete your own admin account while logged in."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        deleted_username = user.username
+        deleted_email = user.email
+        user.delete()
+
+        logger.info(f"Admin deleted user: {deleted_username} ({deleted_email}, id: {target_id})")
+        return Response({
+            "status": "success",
+            "message": f"User '{deleted_username}' ({deleted_email}) has been permanently deleted.",
+            "deleted_user_id": int(target_id)
+        }, status=status.HTTP_200_OK)
+
 
 class ForgotPinRequestOTPView(APIView):
     """
@@ -263,14 +505,26 @@ class ForgotPinRequestOTPView(APIView):
         subject = "Shreyas Foundation Admin - Password/PIN Reset OTP"
         body = (
             f"Namaste {admin_user.full_name or admin_user.username},\n\n"
-            f"Your OTP for resetting the Admin PIN is: {otp}\n"
-            f"This OTP is valid for 10 minutes.\n\n"
+            f"Your OTP for resetting the PIN is: {otp}\n"
             f"If you did not request this, please ignore this email.\n\n"
             f"Shreyas Foundation Technical Team"
         )
         try:
-            sender = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@shreyasfoundation.in')
-            send_mail(subject, body, sender, [admin_user.email], fail_silently=True)
+            from .email_service import generate_otp_email_html
+            sender = getattr(settings, 'DEFAULT_FROM_EMAIL', 'JMS Tech Solution <anand@jmstech.co>')
+            html_message = generate_otp_email_html(
+                recipient_name=admin_user.full_name or admin_user.username,
+                otp_code=otp,
+                purpose="reset"
+            )
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email=sender,
+                recipient_list=[admin_user.email],
+                html_message=html_message,
+                fail_silently=True
+            )
             logger.info(f"Forgot PIN OTP sent to {admin_user.email}")
         except Exception as e:
             logger.error(f"Failed to send email OTP: {e}")
@@ -340,6 +594,299 @@ class ForgotPinVerifyAndResetView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class AdminInteractionCalendarView(APIView):
+    """
+    Step 8: Backend Calendar Tab - Lists day-wise scheduled interviews/interactions for Admin.
+    GET /api/admin/interaction-calendar/?date=YYYY-MM-DD
+    Headers: Authorization: Bearer <ADMIN_PERMANENT_TOKEN>
+    """
+    def get(self, request):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        filter_date_str = request.query_params.get("date")
+        queryset = AdmissionApplication.objects.filter(
+            interaction_date__isnull=False
+        ).select_related('submission').order_by('interaction_date', 'interaction_slot_no', 'created_at')
+
+        if filter_date_str:
+            queryset = queryset.filter(interaction_date=filter_date_str)
+
+        # Group day-wise & slot-wise for the Calendar UI
+        calendar_data = {}
+        for app in queryset:
+            date_key = str(app.interaction_date)
+            if date_key not in calendar_data:
+                calendar_data[date_key] = {
+                    "date": date_key,
+                    "total_children": 0,
+                    "slots": {
+                        1: {"slot_no": 1, "time": "9:00 AM TO 10:00 AM", "count": 0, "children": []},
+                        2: {"slot_no": 2, "time": "10:00 AM TO 11:00 AM", "count": 0, "children": []},
+                        3: {"slot_no": 3, "time": "11:00 AM TO 12:00 PM", "count": 0, "children": []},
+                        4: {"slot_no": 4, "time": "12:00 PM TO 1:00 PM", "count": 0, "children": []},
+                    }
+                }
+
+            calendar_data[date_key]["total_children"] += 1
+            slot_no = app.interaction_slot_no or 1
+            if slot_no in calendar_data[date_key]["slots"]:
+                calendar_data[date_key]["slots"][slot_no]["count"] += 1
+                calendar_data[date_key]["slots"][slot_no]["children"].append({
+                    "application_id": app.id,
+                    "application_number": app.application_number,
+                    "child_name": f"{app.child_first_name} {app.child_surname}".strip(),
+                    "standard": app.standard,
+                    "medium": app.medium,
+                    "vibhag": app.vibhag,
+                    "father_name": app.father_name,
+                    "father_whatsapp": app.father_whatsapp or (app.submission.whatsapp_number if app.submission else ""),
+                    "whatsapp_sent": app.interaction_whatsapp_sent
+                })
+
+        # Format output list
+        days_list = []
+        for date_key in sorted(calendar_data.keys()):
+            day_obj = calendar_data[date_key]
+            slots_list = [day_obj["slots"][s] for s in [1, 2, 3, 4]]
+            days_list.append({
+                "date": day_obj["date"],
+                "total_scheduled": day_obj["total_children"],
+                "capacity": 40,
+                "is_full": day_obj["total_children"] >= 40,
+                "slots": slots_list
+            })
+
+        return Response({
+            "status": "success",
+            "total_days_scheduled": len(days_list),
+            "calendar": days_list
+        }, status=status.HTTP_200_OK)
+
+
+class AdminExportDataView(APIView):
+    """
+    Data Export API for Excel (.xlsx) and CSV:
+    Query Parameters:
+      - type: 'enquiries' | 'submitted' | 'pending' (default: 'enquiries')
+      - period: 'today' | 'week' | 'month' | 'all' (default: 'all')
+      - export_format (or file_format): 'excel' | 'csv' (default: 'excel')
+    """
+    def get(self, request):
+        import csv
+        from django.http import HttpResponse
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+
+        export_type = (request.query_params.get("type") or request.GET.get("type") or "enquiries").lower().strip()
+        period = (request.query_params.get("period") or request.GET.get("period") or "all").lower().strip()
+        export_format = (request.query_params.get("export_format") or request.query_params.get("file_format") or request.GET.get("export_format") or "excel").lower().strip()
+
+        now = timezone.now()
+        start_date = None
+
+        if period == "today":
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            start_date = now - timedelta(days=7)
+        elif period == "month":
+            start_date = now - timedelta(days=30)
+
+        # 1. Base Queryset Filtering
+        if export_type in ["submitted", "submissions", "submitted_applications"]:
+            filename_prefix = "Submitted_Applications"
+            qs = AdmissionApplication.objects.select_related('submission', 'submission__created_by').order_by("-created_at")
+            if role != 'ADMIN' and logged_in_admin:
+                qs = qs.filter(submission__created_by=logged_in_admin)
+            if start_date:
+                qs = qs.filter(created_at__gte=start_date)
+
+            headers = [
+                "Application No", "Submission ID", "Student Name", "Surname",
+                "Standard", "Medium", "Vibhag", "Father Name", "Mother Name",
+                "Father WhatsApp", "Father Email", "Interaction Date", "Interaction Slot",
+                "Interaction Time", "Rules Agreed", "Added By", "Submitted At"
+            ]
+            rows = []
+            for app in qs:
+                sub = app.submission
+                added_by = (sub.created_by.full_name or sub.created_by.username) if sub and sub.created_by else "Online / Self"
+                rows.append([
+                    app.application_number,
+                    f"#{sub.id}" if sub else "-",
+                    app.child_first_name,
+                    app.child_surname,
+                    app.standard,
+                    app.medium,
+                    app.vibhag,
+                    app.father_name,
+                    app.mother_name,
+                    app.father_whatsapp or (sub.whatsapp_number if sub else ""),
+                    app.father_email or (sub.email if sub else ""),
+                    str(app.interaction_date) if app.interaction_date else "-",
+                    f"Slot {app.interaction_slot_no}" if app.interaction_slot_no else "-",
+                    app.interaction_time or "-",
+                    "Yes" if app.agreed_to_rules else "No",
+                    added_by,
+                    app.created_at.strftime("%d-%m-%Y %H:%M") if app.created_at else "-"
+                ])
+
+        elif export_type in ["pending", "pending_forms"]:
+            filename_prefix = "Pending_Admission_Forms"
+            qs = QuizSubmission.objects.filter(
+                payment_status='RECEIVED',
+                admission_application__isnull=True
+            ).select_related('created_by').order_by("-created_at")
+
+            if role != 'ADMIN' and logged_in_admin:
+                qs = qs.filter(created_by=logged_in_admin)
+            if start_date:
+                qs = qs.filter(created_at__gte=start_date)
+
+            headers = [
+                "Submission ID", "Student Name", "Surname", "Parent / Father Name",
+                "Standard", "Medium", "Vibhag", "WhatsApp Number", "Email",
+                "Quiz Score", "QA Status", "Payment Status", "1-Time Reminder Sent",
+                "Added By", "Registered Date"
+            ]
+            rows = []
+            for sub in qs:
+                added_by = (sub.created_by.full_name or sub.created_by.username) if sub.created_by else "Online / Self"
+                rows.append([
+                    f"#{sub.id}",
+                    sub.child_name,
+                    sub.surname,
+                    sub.parent_name,
+                    sub.standard,
+                    sub.medium,
+                    sub.vibhag,
+                    sub.whatsapp_number,
+                    sub.email,
+                    f"{sub.score}/7",
+                    sub.qa_status,
+                    sub.payment_status,
+                    sub.reminder_sent_at.strftime("%d-%m-%Y %H:%M") if sub.reminder_sent_at else "No",
+                    added_by,
+                    sub.created_at.strftime("%d-%m-%Y %H:%M") if sub.created_at else "-"
+                ])
+
+        else:  # Default: all enquiries
+            filename_prefix = "Enquiries"
+            qs = QuizSubmission.objects.select_related('created_by').order_by("-created_at")
+
+            if role != 'ADMIN' and logged_in_admin:
+                qs = qs.filter(created_by=logged_in_admin)
+            if start_date:
+                qs = qs.filter(created_at__gte=start_date)
+
+            headers = [
+                "Submission ID", "Student Name", "Surname", "Parent / Father Name",
+                "Standard", "Medium", "Vibhag", "WhatsApp Number", "Email",
+                "Quiz Score", "Performance Tag", "QA Status", "Payment Status",
+                "Form Submitted?", "Application Number", "Added By", "Created At"
+            ]
+            rows = []
+            for sub in qs:
+                added_by = (sub.created_by.full_name or sub.created_by.username) if sub.created_by else "Online / Self"
+                app_no = sub.admission_application.application_number if hasattr(sub, 'admission_application') and sub.admission_application else "-"
+                rows.append([
+                    f"#{sub.id}",
+                    sub.child_name,
+                    sub.surname,
+                    sub.parent_name,
+                    sub.standard,
+                    sub.medium,
+                    sub.vibhag,
+                    sub.whatsapp_number,
+                    sub.email,
+                    f"{sub.score}/7",
+                    sub.tag or "-",
+                    sub.qa_status,
+                    sub.payment_status,
+                    "Yes" if hasattr(sub, 'admission_application') and sub.admission_application else "No",
+                    app_no,
+                    added_by,
+                    sub.created_at.strftime("%d-%m-%Y %H:%M") if sub.created_at else "-"
+                ])
+
+        filename = f"{filename_prefix}_{period}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # 2. Return CSV Format
+        if export_format == "csv":
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
+            writer = csv.writer(response)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+            return response
+
+        # 3. Return Excel (.xlsx) Format with Styling
+        wb = Workbook()
+        ws = wb.active
+        ws.title = filename_prefix[:30]
+
+        # Header styling: Dark Blue background, bold white text
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ws.append(headers)
+        ws.row_dimensions[1].height = 28
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+        # Append Data Rows with border and zebra striping
+        thin_border = Border(
+            left=Side(style='thin', color='E2E8F0'),
+            right=Side(style='thin', color='E2E8F0'),
+            top=Side(style='thin', color='E2E8F0'),
+            bottom=Side(style='thin', color='E2E8F0')
+        )
+        data_font = Font(name="Calibri", size=10)
+        alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+
+        for r_idx, row in enumerate(rows, start=2):
+            ws.append(row)
+            ws.row_dimensions[r_idx].height = 20
+            for c_idx in range(1, len(row) + 1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.font = data_font
+                cell.border = thin_border
+                cell.alignment = Alignment(vertical="center")
+                if r_idx % 2 == 0:
+                    cell.fill = alt_fill
+
+        # Auto-fit column widths
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = col[0].column_letter
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+        import io
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+        return response
+
+
 class AdminAuditLogView(APIView):
     """
     Audit Logs: Strictly restricted to users with role 'ADMIN'.
@@ -406,6 +953,8 @@ class SubmitQuizView(APIView):
         if denied:
             return denied
 
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+
         sub_id = request.query_params.get("id")
         if sub_id:
             submission = get_object_or_404(QuizSubmission, id=sub_id)
@@ -413,6 +962,12 @@ class SubmitQuizView(APIView):
             return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
         queryset = QuizSubmission.objects.all().order_by("-created_at")
+
+        # Role-based scoping:
+        # ADMIN sees everything.
+        # Other roles (STAFF, ACADEMICIAN) see only their own created enquiries.
+        if role != 'ADMIN' and logged_in_admin:
+            queryset = queryset.filter(created_by=logged_in_admin)
 
         vibhag = request.query_params.get("vibhag")
         if vibhag:
@@ -427,13 +982,28 @@ class SubmitQuizView(APIView):
             queryset = queryset.filter(payment_status__iexact=payment_status)
 
         serializer = QuizSubmissionListSerializer(queryset, many=True)
+
+        # Card summary counts
+        total_count = queryset.count()
+        fees_collected = queryset.filter(payment_status="RECEIVED").count()
+        qa_passed = queryset.filter(qa_status="PASSED").count()
+        qa_failed = queryset.filter(qa_status="FAILED").count()
+        qa_pending = queryset.filter(qa_status="PENDING").count()
+        submitted_forms = queryset.filter(admission_application__isnull=False).count()
+        pending_forms = queryset.filter(payment_status="RECEIVED", admission_application__isnull=True).count()
+
         return Response({
             "status": "success",
-            "total_enquiries": queryset.count(),
-            "qa_passed": queryset.filter(qa_status="PASSED").count(),
-            "qa_failed": queryset.filter(qa_status="FAILED").count(),
-            "qa_pending": queryset.filter(qa_status="PENDING").count(),
-            "fees_collected": queryset.filter(payment_status="RECEIVED").count(),
+            "scope": "ALL" if role == 'ADMIN' else "MY_ENQUIRIES",
+            "user_role": role,
+            "total_enquiries": total_count,
+            "fees_collected": fees_collected,
+            "fee_unpaid": total_count - fees_collected,
+            "qa_passed": qa_passed,
+            "qa_failed": qa_failed,
+            "qa_pending": qa_pending,
+            "submitted_forms": submitted_forms,
+            "pending_forms": pending_forms,
             "data": serializer.data
         }, status=status.HTTP_200_OK)
 
@@ -537,6 +1107,8 @@ class SubmitQuizView(APIView):
         if denied:
             return denied
 
+        _, logged_in_admin, _ = get_authenticated_admin_user(request)
+
         clean_phone = normalize_phone_number(whatsapp_number)
         clean_phone_10 = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
 
@@ -606,7 +1178,8 @@ class SubmitQuizView(APIView):
             qa_status=qa_status,
             is_eligible=is_eligible,
             quiz_completed_at=quiz_completed_at,
-            payment_status=payment_status_input
+            payment_status=payment_status_input,
+            created_by=logged_in_admin
         )
 
         logger.info(f"[POST /api/submit-quiz/] Created Submission ID: {submission.id}, Standard: {standard}, Medium: {medium}, Language: {notif_language}, Payment: {payment_status_input}")
@@ -667,6 +1240,14 @@ class SubmitQuizView(APIView):
             "total": len(ALIGNED_ANSWERS),
             "tag": tag,
             "can_fill_form": is_eligible,
+            "added_by": (logged_in_admin.full_name or logged_in_admin.username) if logged_in_admin else "Online / Self",
+            "created_by": {
+                "id": logged_in_admin.id,
+                "username": logged_in_admin.username,
+                "full_name": logged_in_admin.full_name,
+                "email": logged_in_admin.email,
+                "role": logged_in_admin.role
+            } if logged_in_admin else None,
             "is_repeated_enquiry": QuizSubmission.objects.filter(
                 whatsapp_number__endswith=clean_phone_10,
                 child_name__iexact=child_name.strip(),
@@ -877,6 +1458,8 @@ class AdmissionApplicationView(APIView):
         if denied:
             return denied
 
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+
         app_id = request.query_params.get("id")
         submission_id = request.query_params.get("submission_id")
         logger.info(f"[GET /api/admission-form/] params id={app_id}, submission_id={submission_id}")
@@ -902,9 +1485,18 @@ class AdmissionApplicationView(APIView):
             return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
         applications = AdmissionApplication.objects.all().order_by("-created_at")
+
+        # Role-based scoping for Submitted Applications:
+        # ADMIN sees all applications.
+        # Other roles (STAFF / ACADEMICIAN) see only applications originating from their enquiries.
+        if role != 'ADMIN' and logged_in_admin:
+            applications = applications.filter(submission__created_by=logged_in_admin)
+
         serializer = AdmissionApplicationSerializer(applications, many=True)
         return Response({
             "status": "success",
+            "scope": "ALL" if role == 'ADMIN' else "MY_APPLICATIONS",
+            "user_role": role,
             "total_applications": applications.count(),
             "data": serializer.data
         }, status=status.HTTP_200_OK)
@@ -950,14 +1542,62 @@ class AdmissionApplicationView(APIView):
 
         serializer = AdmissionApplicationSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
+            # 1. Save Application
             application = serializer.save(submission=submission, form_submitted_at=timezone.now())
             logger.info(f"[POST /api/admission-form/] Form SUBMITTED SUCCESSFULLY! Application Number: {application.application_number}")
+
+            # 2. Dynamic Interaction Slot Auto-Allocation (10 kids/slot, 4 slots/day, Mon-Sat)
+            from .slot_service import allocate_next_available_interaction_slot
+            from .whatsapp import send_whatsapp_interaction_scheduled_message
+
+            slot_info = allocate_next_available_interaction_slot()
+            application.interaction_date = slot_info["date"]
+            application.interaction_slot_no = slot_info["slot_no"]
+            application.interaction_time = slot_info["time"]
+            application.interaction_venue = slot_info["venue"]
+
+            # 3. Send WhatsApp Notification to Parent
+            recipient_phone = submission.whatsapp_number or application.father_whatsapp or application.mother_whatsapp
+            wa_sent = False
+            wa_response = {}
+            if recipient_phone:
+                wa_response = send_whatsapp_interaction_scheduled_message(
+                    recipient_number=recipient_phone,
+                    date_str=slot_info["date_str"],
+                    slot_no=slot_info["slot_no"],
+                    time_str=slot_info["time"],
+                    template_name="shreyas_interaction_scheduled"
+                )
+                wa_sent = wa_response.get("success", False)
+                application.interaction_whatsapp_sent = wa_sent
+
+            application.save(update_fields=[
+                'interaction_date',
+                'interaction_slot_no',
+                'interaction_time',
+                'interaction_venue',
+                'interaction_whatsapp_sent'
+            ])
+
+            logger.info(
+                f"[POST /api/admission-form/] Interaction scheduled: Date={slot_info['date_str']}, "
+                f"Slot={slot_info['slot_no']} ({slot_info['time']}), WhatsApp sent={wa_sent}"
+            )
+
             return Response({
                 "status": "success",
                 "message": "Admission form submitted and stored successfully!",
                 "application_id": application.id,
                 "application_number": application.application_number,
                 "vibhag": application.vibhag,
+                "interaction_schedule": {
+                    "date": slot_info["date_str"],
+                    "slot_no": slot_info["slot_no"],
+                    "time": slot_info["time"],
+                    "venue": slot_info["venue"],
+                    "whatsapp_sent": wa_sent,
+                    "whatsapp_response": wa_response
+                },
                 "data": serializer.data
             }, status=status.HTTP_201_CREATED)
 

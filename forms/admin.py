@@ -81,13 +81,20 @@ class QuizSubmissionAdmin(admin.ModelAdmin):
         'tag',
         'qa_status',
         'payment_status',
+        'added_by_display',
         'whatsapp_link_sent',
         'repeated_badge_display',
         'created_at'
     )
-    list_filter = ('vibhag', 'standard', 'medium', 'payment_status', 'qa_status', 'tag', 'whatsapp_link_sent', 'created_at')
-    search_fields = ('child_name', 'surname', 'parent_name', 'whatsapp_number', 'email')
-    readonly_fields = ('created_at', 'quiz_completed_at')
+    list_filter = ('created_by', 'vibhag', 'standard', 'medium', 'payment_status', 'qa_status', 'tag', 'whatsapp_link_sent', 'created_at')
+    search_fields = ('child_name', 'surname', 'parent_name', 'whatsapp_number', 'email', 'created_by__username', 'created_by__full_name')
+    readonly_fields = ('created_at', 'quiz_completed_at', 'created_by')
+
+    def added_by_display(self, obj):
+        if obj.created_by:
+            return obj.created_by.full_name or obj.created_by.username
+        return "Online / Self"
+    added_by_display.short_description = "Added By"
 
     def repeated_badge_display(self, obj):
         clean = "".join(filter(str.isdigit, str(obj.whatsapp_number)))
@@ -106,19 +113,23 @@ class QuizSubmissionAdmin(admin.ModelAdmin):
 class AdmissionApplicationAdmin(admin.ModelAdmin):
     list_display = (
         'application_number',
+        'submission_id_display',
         'child_first_name',
         'child_surname',
         'standard',
         'medium',
         'vibhag',
+        'interaction_date',
+        'interaction_slot_no',
+        'interaction_time',
+        'interaction_whatsapp_sent',
         'father_name',
         'father_whatsapp',
-        'mother_name',
-        'agreed_to_rules',
         'created_at'
     )
     search_fields = (
         'application_number',
+        'submission__id',
         'child_first_name',
         'child_surname',
         'father_name',
@@ -128,10 +139,30 @@ class AdmissionApplicationAdmin(admin.ModelAdmin):
         'father_email'
     )
     list_filter = (
+        'interaction_date',
+        'interaction_slot_no',
+        'interaction_whatsapp_sent',
         'vibhag',
         'standard',
         'medium',
         'agreed_to_rules',
         'created_at'
     )
-    readonly_fields = ('application_number', 'created_at', 'form_submitted_at', 'terms_agreed_timestamp')
+    readonly_fields = (
+        'application_number',
+        'submission_id_display',
+        'created_at',
+        'form_submitted_at',
+        'terms_agreed_timestamp',
+        'interaction_date',
+        'interaction_slot_no',
+        'interaction_time',
+        'interaction_venue',
+        'interaction_whatsapp_sent'
+    )
+
+    def submission_id_display(self, obj):
+        if obj.submission_id:
+            return format_html('<strong>#{}</strong>', obj.submission_id)
+        return "-"
+    submission_id_display.short_description = "Submission ID"
