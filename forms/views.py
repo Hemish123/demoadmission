@@ -2130,19 +2130,530 @@ class ParentConfirmInteractionSlotView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+def generate_professional_school_admission_form_html(forms_list):
+    """
+    Renders an authentic, high-end, professional School Admission Physical Form (A4 printable).
+    Features:
+    - Official Shreyas Foundation & Vikas Kendra crest header
+    - Form metadata, Passport photo box with dashed border
+    - Standard tabular school layout (Student profile, Family bio, Residential address)
+    - Part X & Part Y assessment breakdown table with marks
+    - Signatures block (Mother, Father, Guardian, Principal/Head of School)
+    - CSS @media print optimization (auto page break, crisp typography)
+    """
+    cards_html = ""
+    for idx, item in enumerate(forms_list):
+        sh = item.get("school_header", {})
+        fd = item.get("form_details", {})
+        sp = item.get("student_profile", {})
+        pp = item.get("parent_profile", {})
+        scores = item.get("assessment_scores", {})
+        px = scores.get("part_x", {})
+        py = scores.get("part_y", {})
+        sigs = item.get("signatures_and_declarations", {})
+
+        photo_html = f'<img src="{sp.get("photo_url")}" class="student-photo" alt="Student Photo" />' if sp.get("photo_url") else '<div class="photo-placeholder">Affix Recent<br>Passport Size<br>Photograph Here</div>'
+        father_sig_html = f'<img src="{sigs.get("father_signature_url")}" class="sig-img" />' if sigs.get("father_signature_url") else '<div class="sig-space"></div>'
+        mother_sig_html = f'<img src="{sigs.get("mother_signature_url")}" class="sig-img" />' if sigs.get("mother_signature_url") else '<div class="sig-space"></div>'
+
+        break_class = "page-break" if idx > 0 else ""
+
+        cards_html += f"""
+        <div class="admission-sheet {break_class}">
+            <!-- Header Section -->
+            <div class="header-container">
+                <div class="logo-area">
+                    <div class="school-logo">🌿</div>
+                </div>
+                <div class="header-text">
+                    <h1 class="trust-title">{sh.get('trust_name', 'Shreyas Foundation').upper()}</h1>
+                    <h2 class="school-title">{sh.get('school_name', 'Vikas Kendra').upper()}</h2>
+                    <p class="school-subtitle">Post Box No. 4070, Near Manekbaug Hall, Ambawadi, Ahmedabad – 380015</p>
+                    <div class="badge-title">OFFICIAL ADMISSION APPLICATION & ASSESSMENT RECORD</div>
+                    <div class="academic-year">ACADEMIC SESSION: {sh.get('academic_session', '2026 - 2027')}</div>
+                </div>
+                <div class="photo-container">
+                    {photo_html}
+                </div>
+            </div>
+
+            <!-- Meta Strip -->
+            <table class="form-meta-table">
+                <tr>
+                    <td style="width: 25%;"><strong>Application No:</strong> <span class="highlight">{fd.get('application_number')}</span></td>
+                    <td style="width: 25%;"><strong>Date of Submission:</strong> {fd.get('date_of_submission')}</td>
+                    <td style="width: 25%;"><strong>Standard & Medium:</strong> {fd.get('standard')} ({fd.get('medium')})</td>
+                    <td style="width: 25%;"><strong>Vibhag:</strong> {fd.get('vibhag')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Merit Rank:</strong> <span class="rank-badge">#{fd.get('merit_rank') or '-'}</span></td>
+                    <td><strong>Admission Status:</strong> <span class="status-pill">{fd.get('admission_status')}</span></td>
+                    <td colspan="2"><strong>Cutoff Qualification:</strong> Eligible for Enrollment</td>
+                </tr>
+            </table>
+
+            <!-- Section 1: Student Information -->
+            <div class="section-title">1. STUDENT PARTICULARS</div>
+            <table class="grid-table">
+                <tr>
+                    <td class="lbl" style="width: 20%;">Student's Full Name:</td>
+                    <td colspan="3" class="val" style="font-weight: bold; font-size: 13px;">{sp.get('first_name')} {sp.get('surname')}</td>
+                </tr>
+                <tr>
+                    <td class="lbl">Date of Birth:</td>
+                    <td class="val" style="width: 30%;">{sp.get('date_of_birth')}</td>
+                    <td class="lbl" style="width: 20%;">Gender:</td>
+                    <td class="val" style="width: 30%;">{sp.get('gender') or 'Not Specified'}</td>
+                </tr>
+                <tr>
+                    <td class="lbl">Place of Birth:</td>
+                    <td class="val">{sp.get('birth_place')}</td>
+                    <td class="lbl">Blood Group:</td>
+                    <td class="val">{sp.get('blood_group')}</td>
+                </tr>
+                <tr>
+                    <td class="lbl">Mother Tongue:</td>
+                    <td class="val">{sp.get('mother_tongue')}</td>
+                    <td class="lbl">Nationality:</td>
+                    <td class="val">{sp.get('nationality')}</td>
+                </tr>
+            </table>
+
+            <!-- Section 2: Family Information -->
+            <div class="section-title">2. PARENTS / GUARDIAN PARTICULARS</div>
+            <table class="grid-table">
+                <thead>
+                    <tr class="sub-head">
+                        <th style="width: 20%;">Particulars</th>
+                        <th style="width: 40%;">Father / Primary Guardian</th>
+                        <th style="width: 40%;">Mother</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="lbl">Full Name:</td>
+                        <td class="val font-semibold">{pp.get('father_name')} {pp.get('father_surname')}</td>
+                        <td class="val font-semibold">{pp.get('mother_name')} {pp.get('mother_surname')}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Educational Qualification:</td>
+                        <td class="val">{pp.get('father_qualification') or '-'}</td>
+                        <td class="val">{pp.get('mother_qualification') or '-'}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Occupation & Designation:</td>
+                        <td class="val">{pp.get('father_occupation') or '-'}</td>
+                        <td class="val">{pp.get('mother_occupation') or '-'}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Annual Income:</td>
+                        <td class="val">{pp.get('father_annual_income') or '-'}</td>
+                        <td class="val">{pp.get('mother_annual_income') or '-'}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Mobile / WhatsApp:</td>
+                        <td class="val">{pp.get('father_mobile')}</td>
+                        <td class="val">{pp.get('mother_mobile')}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Email Address:</td>
+                        <td class="val">{pp.get('father_email') or '-'}</td>
+                        <td class="val">{pp.get('mother_email') or '-'}</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Residential Address:</td>
+                        <td colspan="2" class="val">{pp.get('residential_address')}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Section 3: Assessment Summary -->
+            <div class="section-title">3. ASSESSMENT & MERIT EVALUATION SCORECARD</div>
+            <table class="grid-table score-table">
+                <thead>
+                    <tr class="sub-head">
+                        <th colspan="2">PART X: APPLICATION & BACKGROUND (MAX 20)</th>
+                        <th colspan="2">PART Y: EDUCATOR INTERACTION ASSESSMENT (MAX 30)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="lbl" style="width: 30%;">Alak Malak Pre-Toddler Bonus:</td>
+                        <td class="val text-center" style="width: 20%; font-weight: bold;">{px.get('alak_malak', 0)} / 10</td>
+                        <td class="lbl" style="width: 30%;">Cognitive Assessment (5 + 5):</td>
+                        <td class="val text-center" style="width: 20%; font-weight: bold;">{(py.get('cognitive_1') or 0) + (py.get('cognitive_2') or 0)} / 10</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Parent Screening MCQ Score:</td>
+                        <td class="val text-center" style="font-weight: bold;">{px.get('parent_mcq', 0)} / 7</td>
+                        <td class="lbl">Affective Domain Assessment:</td>
+                        <td class="val text-center" style="font-weight: bold;">{py.get('affective', 0)} / 10</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Sibling Shreyas VK Bonus:</td>
+                        <td class="val text-center" style="font-weight: bold;">{px.get('sibling_vk', 0)} / 3</td>
+                        <td class="lbl">Psychomotor Domain Assessment:</td>
+                        <td class="val text-center" style="font-weight: bold;">{py.get('psychomotor', 0)} / 10</td>
+                    </tr>
+                    <tr>
+                        <td class="lbl">Evaluation Observation Tags:</td>
+                        <td class="val text-center text-xs">M: {py.get('m_category') or '-'} | MI: {py.get('mi_category') or '-'}</td>
+                        <td class="lbl">Assigned Evaluator:</td>
+                        <td class="val text-center text-xs">{py.get('evaluator') or 'Admissions Board'}</td>
+                    </tr>
+                    <tr class="total-row">
+                        <td class="total-lbl">TOTAL PART X SCORE:</td>
+                        <td class="total-val">{px.get('total_part_x', 0)} / 20</td>
+                        <td class="total-lbl">TOTAL PART Y SCORE:</td>
+                        <td class="total-val">{py.get('total_part_y', 0)} / 30</td>
+                    </tr>
+                    <tr class="grand-total-row">
+                        <td colspan="2" class="grand-lbl">FINAL AGGREGATE MERIT SCORE:</td>
+                        <td colspan="2" class="grand-val">{scores.get('final_score', 0)} / 50 Marks (Rank: #{fd.get('merit_rank') or '-'})</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Section 4: Declaration & Signatures -->
+            <div class="declaration-block">
+                <strong>Declaration:</strong> I/We hereby declare that all information furnished in this admission application is true and complete to the best of my/our knowledge. I/We agree to abide by the philosophy, rules, and code of conduct of Shreyas Foundation Vikas Kendra.
+            </div>
+
+            <div class="signatures-container">
+                <div class="sig-box">
+                    {father_sig_html}
+                    <div class="sig-line">Father's Signature</div>
+                </div>
+                <div class="sig-box">
+                    {mother_sig_html}
+                    <div class="sig-line">Mother's Signature</div>
+                </div>
+                <div class="sig-box">
+                    <div class="sig-space"></div>
+                    <div class="sig-line">Educator / Evaluator</div>
+                </div>
+                <div class="sig-box">
+                    <div class="sig-space"></div>
+                    <div class="sig-line">Head of School / Director</div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="form-footer">
+                <div>Document Generated On: {fd.get('date_of_submission')} | Vikas Kendra Admissions Control Center</div>
+                <div>Page 1 of 1</div>
+            </div>
+        </div>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Official Admission Form - Shreyas Foundation</title>
+    <style>
+        @page {{
+            size: A4 portrait;
+            margin: 10mm;
+        }}
+        * {{
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }}
+        body {{
+            font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: #f1f5f9;
+            color: #1e293b;
+        }}
+        .admission-sheet {{
+            width: 210mm;
+            min-height: 285mm;
+            padding: 12mm 14mm;
+            margin: 0 auto 15px auto;
+            background: #ffffff;
+            border: 2px solid #0f3d2e;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            position: relative;
+        }}
+        .page-break {{
+            page-break-before: always;
+        }}
+        .header-container {{
+            display: flex;
+            align-items: center;
+            border-bottom: 2px solid #0f3d2e;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+        }}
+        .logo-area {{
+            width: 65px;
+            text-align: center;
+        }}
+        .school-logo {{
+            font-size: 42px;
+            line-height: 1;
+        }}
+        .header-text {{
+            flex: 1;
+            text-align: center;
+            padding: 0 10px;
+        }}
+        .trust-title {{
+            margin: 0;
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: #0f3d2e;
+        }}
+        .school-title {{
+            margin: 2px 0 0 0;
+            font-size: 20px;
+            font-weight: 900;
+            letter-spacing: 1.5px;
+            color: #8b1e28;
+        }}
+        .school-subtitle {{
+            margin: 2px 0;
+            font-size: 9px;
+            color: #475569;
+        }}
+        .badge-title {{
+            display: inline-block;
+            background-color: #0f3d2e;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 3px 12px;
+            border-radius: 3px;
+            margin-top: 3px;
+            letter-spacing: 0.5px;
+        }}
+        .academic-year {{
+            font-size: 10px;
+            font-weight: bold;
+            color: #1e293b;
+            margin-top: 2px;
+        }}
+        .photo-container {{
+            width: 85px;
+            height: 100px;
+            border: 1.5px dashed #0f3d2e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #fafaf9;
+            overflow: hidden;
+        }}
+        .photo-placeholder {{
+            font-size: 8px;
+            color: #64748b;
+            text-align: center;
+            padding: 4px;
+            line-height: 1.2;
+        }}
+        .student-photo {{
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }}
+        .form-meta-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 8px;
+            font-size: 10.5px;
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+        }}
+        .form-meta-table td {{
+            padding: 4px 6px;
+            border: 1px solid #cbd5e1;
+        }}
+        .highlight {{
+            color: #8b1e28;
+            font-weight: bold;
+        }}
+        .rank-badge {{
+            background: #fef08a;
+            color: #854d0e;
+            padding: 1px 6px;
+            font-weight: bold;
+            border-radius: 3px;
+        }}
+        .status-pill {{
+            background: #dcfce7;
+            color: #166534;
+            padding: 1px 6px;
+            font-weight: bold;
+            border-radius: 3px;
+        }}
+        .section-title {{
+            background: #0f3d2e;
+            color: #ffffff;
+            font-size: 10.5px;
+            font-weight: bold;
+            padding: 3px 8px;
+            letter-spacing: 0.5px;
+            margin-top: 6px;
+            border-left: 4px solid #8b1e28;
+        }}
+        .grid-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 6px;
+            font-size: 10px;
+        }}
+        .grid-table th, .grid-table td {{
+            border: 1px solid #cbd5e1;
+            padding: 4px 6px;
+        }}
+        .grid-table .lbl {{
+            background-color: #f8fafc;
+            color: #334155;
+            font-weight: 600;
+        }}
+        .grid-table .val {{
+            color: #0f172a;
+        }}
+        .grid-table .sub-head th {{
+            background-color: #f1f5f9;
+            color: #0f3d2e;
+            font-size: 9.5px;
+            text-align: center;
+            font-weight: 700;
+            padding: 4px;
+        }}
+        .text-center {{ text-align: center; }}
+        .font-semibold {{ font-weight: 600; }}
+        .text-xs {{ font-size: 9px; }}
+        
+        .score-table .total-row td {{
+            background-color: #f8fafc;
+            border-top: 2px solid #0f3d2e;
+            font-weight: bold;
+            font-size: 10px;
+        }}
+        .total-lbl {{ color: #0f3d2e; font-weight: bold; }}
+        .total-val {{ text-align: center; font-weight: bold; color: #8b1e28; font-size: 11px; }}
+        
+        .grand-total-row td {{
+            background-color: #f0fdf4 !important;
+            border-top: 2px solid #16a34a !important;
+            border-bottom: 2px solid #16a34a !important;
+        }}
+        .grand-lbl {{
+            font-weight: 900;
+            color: #166534;
+            font-size: 11px;
+            text-align: right;
+            padding-right: 12px;
+        }}
+        .grand-val {{
+            font-weight: 900;
+            color: #166534;
+            font-size: 12px;
+            text-align: center;
+        }}
+        .declaration-block {{
+            border: 1px dashed #cbd5e1;
+            padding: 6px 8px;
+            font-size: 8.5px;
+            color: #475569;
+            line-height: 1.3;
+            margin-top: 6px;
+            margin-bottom: 14px;
+            background: #fafaf9;
+        }}
+        .signatures-container {{
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            padding-top: 5px;
+        }}
+        .sig-box {{
+            width: 23%;
+            text-align: center;
+        }}
+        .sig-space {{
+            height: 35px;
+        }}
+        .sig-img {{
+            max-height: 35px;
+            max-width: 100%;
+            display: block;
+            margin: 0 auto;
+        }}
+        .sig-line {{
+            border-top: 1px solid #475569;
+            padding-top: 3px;
+            font-size: 9px;
+            font-weight: 600;
+            color: #334155;
+        }}
+        .form-footer {{
+            display: flex;
+            justify-content: space-between;
+            font-size: 8px;
+            color: #94a3b8;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 4px;
+            margin-top: 15px;
+        }}
+
+        @media print {{
+            body {{
+                background-color: #ffffff;
+                padding: 0;
+            }}
+            .admission-sheet {{
+                border: 2px solid #0f3d2e;
+                box-shadow: none;
+                margin: 0;
+                width: 100%;
+                min-height: 100vh;
+            }}
+        }}
+    </style>
+</head>
+<body onload="window.print()">
+    {cards_html}
+</body>
+</html>"""
+
+
+from rest_framework.renderers import JSONRenderer, BrowsableAPIRenderer, StaticHTMLRenderer, BaseRenderer
+
+class PassthroughHtmlRenderer(BaseRenderer):
+    media_type = 'text/html'
+    format = 'html'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if isinstance(data, str):
+            return data.encode('utf-8')
+        return str(data).encode('utf-8')
+
+
 class AdminPrintPhysicalFormView(APIView):
     """
     Step 7: Render physical form layout for single application or bulk selected admissions.
-    GET /api/admin/applications/<application_id>/print/
-    GET /api/admin/applications/print-bulk/?standard=1&medium=Gujarati&status=SELECTED
+    GET /api/admin/applications/<application_id>/print/?format=html (Opens crisp, professional printable form)
+    GET /api/admin/applications/print-bulk/?standard=1&medium=Gujarati&status=SELECTED&format=html (Bulk print)
     """
+    renderer_classes = [JSONRenderer, BrowsableAPIRenderer, PassthroughHtmlRenderer]
     def get(self, request, application_id=None):
         denied = enforce_admin_token(request)
         if denied:
             return denied
 
         if application_id:
-            applications = AdmissionApplication.objects.filter(id=application_id)
+            from django.db.models import Q
+            if str(application_id).isdigit():
+                applications = AdmissionApplication.objects.filter(Q(id=int(application_id)) | Q(application_number=str(application_id)))
+            else:
+                applications = AdmissionApplication.objects.filter(application_number=str(application_id))
+
             if not applications.exists():
                 return Response({
                     "status": "error",
@@ -2236,6 +2747,14 @@ class AdminPrintPhysicalFormView(APIView):
                     "guardian_signature_url": app.guardian_signature.url if app.guardian_signature else None
                 }
             })
+
+        # Check if caller requested direct HTML layout for browser printing
+        # e.g. GET /api/admin/applications/<id>/print/?format=html
+        print_format = (request.query_params.get("format") or request.query_params.get("view") or "").lower().strip()
+        if print_format == "html":
+            from django.http import HttpResponse
+            html_content = generate_professional_school_admission_form_html(forms_data)
+            return HttpResponse(html_content, content_type="text/html; charset=utf-8")
 
         return Response({
             "status": "success",
