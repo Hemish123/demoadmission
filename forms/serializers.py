@@ -208,6 +208,7 @@ class SubmitQuizSerializer(serializers.Serializer):
         return attrs
 
 
+
 class AdmissionApplicationSerializer(serializers.ModelSerializer):
     submission_id = serializers.IntegerField(write_only=True, required=False)
     child_first_name = serializers.CharField(required=False, allow_blank=True)
@@ -271,33 +272,37 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                     "health_certificate": "The doctor's certificate and health report must be uploaded."
                 })
 
-            # Mandatory Documents Validation: Child Aadhar, Parent Aadhar, and Birth Certificate
-            if not attrs.get('child_aadhar_card'):
-                raise serializers.ValidationError({
-                    "child_aadhar_card": "Child's Aadhar Card is compulsory and must be uploaded."
-                })
+            # Document validation rules based on grade/class:
+            # 1. Play group / Nursery: Birth certificate and Aadhar card of parents (Child aadhar optional if not generated yet)
+            # 2. Jr.KG / Sr.KG / Higher: Birth certificate, Aadhar card of parents, and report card of previous academic year
+            # 3. Alak Malak Certificate: OPTIONAL! If applicant opted for Alakmalak:
+            #    - 6 months completed -> upload certificate (gets +5 marks in Part X)
+            #    - 6-12 months completed -> upload certificate (gets +10 marks in Part X)
+            # 4. Sibling: If opted for VK1/VK2/VK3 -> upload receipt (+3 marks in Part X). If not opted -> 0.
 
-            if not attrs.get('parent_aadhar_card'):
-                raise serializers.ValidationError({
-                    "parent_aadhar_card": "Parent's Aadhar Card is compulsory and must be uploaded."
-                })
-
+            # Mandatory: Birth certificate & Parent Aadhar
             if not attrs.get('birth_certificate'):
                 raise serializers.ValidationError({
                     "birth_certificate": "Birth Certificate is compulsory and must be uploaded."
                 })
 
-            # Previous year report card vs Alak Malak Certificate check based on vibhag
-            vibhag = (submission.vibhag if submission else attrs.get('vibhag', '')).strip().lower()
-            is_nursery = vibhag in ['shishu', 'nursery', 'shishu (શિશુ)']
+            if not (attrs.get('parent_aadhar_card') or attrs.get('child_aadhar_card')):
+                raise serializers.ValidationError({
+                    "parent_aadhar_card": "Parent's Aadhar Card is compulsory and must be uploaded."
+                })
 
-            if is_nursery:
-                if not attrs.get('alak_malak_certificate'):
-                    raise serializers.ValidationError({
-                        "alak_malak_certificate": "Alak Malak Certificate is required for Nursery (Shishu) applicants."
-                    })
-            else:
+            # Check if Jr/Sr.KG or higher requires previous report card
+            std_str = str(attrs.get('standard') or (submission.standard if submission else '') or '').strip().lower()
+            vibhag_str = str(attrs.get('vibhag') or (submission.vibhag if submission else '') or '').strip().lower()
+            
+            is_playgroup_nursery = any(k in std_str or k in vibhag_str for k in ['play', 'nursery', 'shishu', 'toddler'])
+            
+            if not is_playgroup_nursery:
+                # Jr.KG, Sr.KG, and higher classes require previous report card
                 if not attrs.get('previous_report_card'):
+                    raise serializers.ValidationError({
+                        "previous_report_card": "Previous academic year report card is required for Jr.KG / Sr.KG and higher classes."
+                    })
                     raise serializers.ValidationError({
                         "previous_report_card": "Previous year's report card is required for admission."
                     })
@@ -360,3 +365,78 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                     attrs['father_email'] = submission.email
 
         return attrs
+
+
+class EvaluationAssessmentSerializer(serializers.Serializer):
+    """
+    Serializer for Academicians/Educators filling Part Y Digital Assessment
+    Cognitive Assessment 1: max 5
+    Cognitive Assessment 2: max 5
+    Affective Assessment: max 10
+    Psychomotor Assessment: max 10
+    Total Part Y: 30 marks
+    """
+    m_tag = serializers.CharField(required=False, allow_blank=True, default="")
+    mi_tag = serializers.CharField(required=False, allow_blank=True, default="")
+    cognitive_assessment_1 = serializers.FloatField(required=True, min_value=0.0, max_value=5.0)
+    cognitive_assessment_2 = serializers.FloatField(required=True, min_value=0.0, max_value=5.0)
+    affective_assessment = serializers.FloatField(required=True, min_value=0.0, max_value=10.0)
+    psychomotor_assessment = serializers.FloatField(required=True, min_value=0.0, max_value=10.0)
+
+
+class MeritRankBoardSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    parent_name = serializers.SerializerMethodField()
+    contact_number = serializers.SerializerMethodField()
+    mcq_score = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdmissionApplication
+        fields = [
+            'id',
+            'application_number',
+            'merit_rank',
+            'student_name',
+            'parent_name',
+            'standard',
+            'medium',
+            'vibhag',
+            'contact_number',
+            'mcq_score',
+            'alak_malak_months',
+            'alak_malak_score',
+            'sibling_opted_vk',
+            'sibling_score',
+            'total_part_x_score',
+            'evaluator_m',
+            'evaluator_mi',
+            'cognitive_assessment_1',
+            'cognitive_assessment_2',
+            'affective_assessment',
+            'psychomotor_assessment',
+            'total_part_y_score',
+            'final_aggregate_score',
+            'admission_status',
+            'interaction_date',
+            'interaction_time',
+            'interaction_slot_no',
+            'parent_confirmed_slot',
+            'created_at'
+        ]
+
+    def get_student_name(self, obj):
+        return f"{obj.child_first_name} {obj.child_surname}".strip()
+
+    def get_parent_name(self, obj):
+        return obj.father_name or obj.mother_name or (obj.submission.parent_name if obj.submission else "")
+
+    def get_contact_number(self, obj):
+        return obj.father_whatsapp or obj.mother_whatsapp or (obj.submission.whatsapp_number if obj.submission else "")
+
+    def get_mcq_score(self, obj):
+        if obj.mcq_score_part_x:
+            return obj.mcq_score_part_x
+        if obj.submission:
+            return obj.submission.score
+        return 0.0
+

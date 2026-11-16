@@ -599,11 +599,19 @@ class AdminInteractionCalendarView(APIView):
     Step 8: Backend Calendar Tab - Lists day-wise scheduled interviews/interactions for Admin.
     GET /api/admin/interaction-calendar/?date=YYYY-MM-DD
     Headers: Authorization: Bearer <ADMIN_PERMANENT_TOKEN>
+    Strictly restricted: Only users with role 'ADMIN' can access.
     """
     def get(self, request):
         denied = enforce_admin_token(request)
         if denied:
             return denied
+
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+        if role != 'ADMIN':
+            return Response({
+                "status": "error",
+                "message": "Access restricted. Interaction calendar is only visible to Admin users."
+            }, status=status.HTTP_403_FORBIDDEN)
 
         filter_date_str = request.query_params.get("date")
         queryset = AdmissionApplication.objects.filter(
@@ -687,7 +695,15 @@ class AdminExportDataView(APIView):
 
         export_type = (request.query_params.get("type") or request.GET.get("type") or "enquiries").lower().strip()
         period = (request.query_params.get("period") or request.GET.get("period") or "all").lower().strip()
-        export_format = (request.query_params.get("export_format") or request.query_params.get("file_format") or request.GET.get("export_format") or "excel").lower().strip()
+        # Accept 'export_format', 'file_format', or fallback to 'format'
+        export_format = (
+            request.query_params.get("export_format") or
+            request.query_params.get("file_format") or
+            request.GET.get("export_format") or
+            request.GET.get("file_format") or
+            request.GET.get("format") or
+            "excel"
+        ).lower().strip()
 
         now = timezone.now()
         start_date = None
@@ -868,11 +884,15 @@ class AdminExportDataView(APIView):
                 if r_idx % 2 == 0:
                     cell.fill = alt_fill
 
-        # Auto-fit column widths
+        # Auto-fit column widths safely
         for col in ws.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
+            max_len = 0
+            for cell in col:
+                val = str(cell.value or "")
+                if len(val) > max_len:
+                    max_len = len(val)
             col_letter = col[0].column_letter
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
 
         import io
         output = io.BytesIO()
@@ -884,6 +904,8 @@ class AdminExportDataView(APIView):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+        # Expose Content-Disposition header so frontend Axios/Fetch can read filename
+        response['Access-Control-Expose-Headers'] = 'Content-Disposition'
         return response
 
 
@@ -1808,3 +1830,424 @@ class AdmissionApplicationView(APIView):
                 "submission_id": int(submission_id),
                 "application_number": app_number
             }, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# Stages 1-8: Evaluation, Rating, Cutoff, Confirmation, Physical Print & Archival
+# ==============================================================================
+
+class AdminEvaluationAssessmentView(APIView):
+    """
+    Step 2 & 3: Digital Assessment Form for Academicians & Educators
+    GET: Retrieve applicant metadata, Part X calculation breakdown, and existing Part Y scores.
+    POST: Save Part Y evaluation (Cognitive 5+5, Affective 10, Psychomotor 10), aggregate total 50 marks.
+    Endpoint: /api/admin/evaluation/<application_id>/
+    Header: Authorization: Bearer <ADMIN_PERMANENT_TOKEN>
+    """
+    def get(self, request, application_id):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        application = AdmissionApplication.objects.select_related('submission', 'evaluator').filter(id=application_id).first()
+        if not application:
+            return Response({
+                "status": "error",
+                "message": f"Admission application {application_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Pre-calculate or ensure Part X score is up to date
+        from .evaluation_service import calculate_part_x_score
+        calculate_part_x_score(application, save=True)
+
+        return Response({
+            "status": "success",
+            "application_id": application.id,
+            "application_number": application.application_number,
+            "student_info": {
+                "name": f"{application.child_first_name} {application.child_surname}".strip(),
+                "standard": application.standard,
+                "medium": application.medium,
+                "vibhag": application.vibhag,
+                "interaction_date": str(application.interaction_date) if application.interaction_date else None,
+                "interaction_time": application.interaction_time,
+                "interaction_slot_no": application.interaction_slot_no,
+                "parent_name": application.father_name or application.mother_name,
+                "parent_whatsapp": application.father_whatsapp or application.mother_whatsapp,
+            },
+            "part_x": {
+                "max_marks": 20,
+                "alak_malak_months": application.alak_malak_months,
+                "alak_malak_score": application.alak_malak_score,
+                "alak_malak_certificate_uploaded": bool(application.alak_malak_certificate),
+                "mcq_score": application.mcq_score_part_x,
+                "sibling_in_shreyas": application.has_sibling_in_shreyas,
+                "sibling_opted_vk": application.sibling_opted_vk,
+                "sibling_receipt_uploaded": bool(application.sibling_vikas_kendra_1_receipt or application.sibling_vikas_kendra_2_receipt),
+                "sibling_score": application.sibling_score,
+                "total_part_x_score": application.total_part_x_score
+            },
+            "part_y": {
+                "max_marks": 30,
+                "evaluator": application.evaluator.full_name or application.evaluator.username if application.evaluator else None,
+                "m_tag": application.evaluator_m or "",
+                "mi_tag": application.evaluator_mi or "",
+                "cognitive_assessment_1": application.cognitive_assessment_1 or 0.0,
+                "cognitive_assessment_2": application.cognitive_assessment_2 or 0.0,
+                "affective_assessment": application.affective_assessment or 0.0,
+                "psychomotor_assessment": application.psychomotor_assessment or 0.0,
+                "total_part_y_score": application.total_part_y_score or 0.0
+            },
+            "final_aggregate_score": application.final_aggregate_score or 0.0,
+            "merit_rank": application.merit_rank,
+            "admission_status": application.admission_status
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, application_id):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        _, logged_in_admin, _ = get_authenticated_admin_user(request)
+
+        application = AdmissionApplication.objects.filter(id=application_id).first()
+        if not application:
+            return Response({
+                "status": "error",
+                "message": f"Admission application {application_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        from .serializers import EvaluationAssessmentSerializer
+        from .evaluation_service import save_part_y_evaluation
+
+        serializer = EvaluationAssessmentSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "status": "error",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        vd = serializer.validated_data
+        final_score = save_part_y_evaluation(
+            application=application,
+            evaluator_user=logged_in_admin,
+            m_tag=vd.get('m_tag', ''),
+            mi_tag=vd.get('mi_tag', ''),
+            cognitive_1=vd.get('cognitive_assessment_1', 0.0),
+            cognitive_2=vd.get('cognitive_assessment_2', 0.0),
+            affective=vd.get('affective_assessment', 0.0),
+            psychomotor=vd.get('psychomotor_assessment', 0.0)
+        )
+
+        return Response({
+            "status": "success",
+            "message": f"Digital assessment evaluated and saved successfully for {application.application_number}.",
+            "application_id": application.id,
+            "application_number": application.application_number,
+            "part_x_score": application.total_part_x_score,
+            "part_y_score": application.total_part_y_score,
+            "final_aggregate_score": final_score,
+            "admission_status": application.admission_status
+        }, status=status.HTTP_200_OK)
+
+
+class AdminMeritBoardView(APIView):
+    """
+    Step 5 & 6: Student Rating & Cutoff Selection Board
+    GET /api/admin/merit-board/?standard=1&medium=Gujarati&cutoff=80
+    Recalculates or retrieves merit ranking sorted by aggregate marks descending.
+    Assigns top 80 seats as SELECTED, rest as WAITLISTED.
+    Strictly restricted: Only users with role 'ADMIN' can access.
+    """
+    def get(self, request):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+        if role != 'ADMIN':
+            return Response({
+                "status": "error",
+                "message": "Access restricted. Merit Board & Cutoff ratings are only visible to Admin users."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        from .evaluation_service import recompute_merit_rank_and_cutoff
+        from .serializers import MeritRankBoardSerializer
+
+        standard = (request.query_params.get("standard") or "1").strip()
+        medium = (request.query_params.get("medium") or "Gujarati").strip()
+        cutoff_seats = int(request.query_params.get("cutoff") or 80)
+        recompute = request.query_params.get("recompute", "true").lower() in ["true", "1", "yes"]
+
+        if recompute:
+            summary = recompute_merit_rank_and_cutoff(standard=standard, medium=medium, cutoff_seats=cutoff_seats)
+        else:
+            summary = {
+                "standard": standard,
+                "medium": medium,
+                "cutoff_seats": cutoff_seats
+            }
+
+        ranked_apps = AdmissionApplication.objects.filter(
+            standard__iexact=standard,
+            medium__iexact=medium
+        ).order_by('merit_rank', '-final_aggregate_score')
+
+        serializer = MeritRankBoardSerializer(ranked_apps, many=True)
+
+        return Response({
+            "status": "success",
+            "summary": summary,
+            "cutoff_seats": cutoff_seats,
+            "total_applicants": ranked_apps.count(),
+            "merit_list": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AdminMeritCancellationView(APIView):
+    """
+    Cancellation handling with Automatic Waitlist Promotion:
+    When a selected student cancels, their status becomes CANCELLED, and the next
+    waitlisted applicant automatically becomes SELECTED (filling the 80th seat).
+    POST /api/admin/merit-board/cancel/<application_id>/
+    """
+    def post(self, request, application_id):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
+        if role != 'ADMIN':
+            return Response({
+                "status": "error",
+                "message": "Access restricted. Only Admin users can cancel admissions and promote candidates."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        application = AdmissionApplication.objects.filter(id=application_id).first()
+        if not application:
+            return Response({
+                "status": "error",
+                "message": f"Admission application {application_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        old_status = application.admission_status
+        standard = application.standard
+        medium = application.medium
+
+        application.admission_status = 'CANCELLED'
+        application.merit_rank = None
+        application.save(update_fields=['admission_status', 'merit_rank'])
+
+        from .evaluation_service import recompute_merit_rank_and_cutoff
+        summary = recompute_merit_rank_and_cutoff(standard=standard, medium=medium, cutoff_seats=80)
+
+        # Find candidate newly promoted to 80th seat (if any)
+        promoted_app = AdmissionApplication.objects.filter(
+            standard__iexact=standard,
+            medium__iexact=medium,
+            merit_rank=80,
+            admission_status='SELECTED'
+        ).first()
+
+        promoted_data = None
+        if promoted_app and promoted_app.id != application.id:
+            promoted_data = {
+                "application_id": promoted_app.id,
+                "application_number": promoted_app.application_number,
+                "student_name": f"{promoted_app.child_first_name} {promoted_app.child_surname}".strip(),
+                "rank": promoted_app.merit_rank,
+                "score": promoted_app.final_aggregate_score
+            }
+
+        return Response({
+            "status": "success",
+            "message": f"Application {application.application_number} cancelled. Waitlist updated automatically.",
+            "cancelled_application": application.application_number,
+            "old_status": old_status,
+            "promoted_waitlist_candidate": promoted_data,
+            "summary": summary
+        }, status=status.HTTP_200_OK)
+
+
+class ParentConfirmInteractionSlotView(APIView):
+    """
+    Allows parents to confirm their scheduled interaction slot via WhatsApp link / Portal.
+    POST /api/admission-form/confirm-slot/
+    Body: {"application_number": "SF-24E309F3"} or {"application_id": 1}
+    """
+    def post(self, request):
+        app_no = request.data.get("application_number")
+        app_id = request.data.get("application_id")
+
+        if not app_no and not app_id:
+            return Response({
+                "status": "error",
+                "message": "application_number or application_id is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        query = AdmissionApplication.objects.filter(application_number=app_no) if app_no else AdmissionApplication.objects.filter(id=app_id)
+        application = query.first()
+
+        if not application:
+            return Response({
+                "status": "error",
+                "message": "Admission application not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        application.parent_confirmed_slot = True
+        application.save(update_fields=['parent_confirmed_slot'])
+
+        return Response({
+            "status": "success",
+            "message": "Interaction slot successfully confirmed by parent.",
+            "application_number": application.application_number,
+            "interaction_date": str(application.interaction_date),
+            "interaction_time": application.interaction_time,
+            "interaction_slot_no": application.interaction_slot_no,
+            "parent_confirmed_slot": True
+        }, status=status.HTTP_200_OK)
+
+
+class AdminPrintPhysicalFormView(APIView):
+    """
+    Step 7: Render physical form layout for single application or bulk selected admissions.
+    GET /api/admin/applications/<application_id>/print/
+    GET /api/admin/applications/print-bulk/?standard=1&medium=Gujarati&status=SELECTED
+    """
+    def get(self, request, application_id=None):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        if application_id:
+            applications = AdmissionApplication.objects.filter(id=application_id)
+            if not applications.exists():
+                return Response({
+                    "status": "error",
+                    "message": f"Admission application {application_id} not found."
+                }, status=status.HTTP_404_NOT_FOUND)
+        else:
+            standard = request.query_params.get("standard")
+            medium = request.query_params.get("medium")
+            app_status = request.query_params.get("status", "SELECTED")
+
+            applications = AdmissionApplication.objects.all()
+            if standard:
+                applications = applications.filter(standard__iexact=standard)
+            if medium:
+                applications = applications.filter(medium__iexact=medium)
+            if app_status:
+                applications = applications.filter(admission_status__iexact=app_status)
+            applications = applications.order_by('merit_rank', 'application_number')
+
+        forms_data = []
+        for app in applications:
+            forms_data.append({
+                "school_header": {
+                    "trust_name": "Shreyas Foundation",
+                    "school_name": "Vikas Kendra",
+                    "location": "Ahmedabad, Gujarat",
+                    "academic_session": "2026 - 2027"
+                },
+                "form_details": {
+                    "application_number": app.application_number,
+                    "date_of_submission": app.created_at.strftime("%d-%m-%Y") if app.created_at else "-",
+                    "vibhag": app.vibhag,
+                    "standard": app.standard,
+                    "medium": app.medium,
+                    "merit_rank": app.merit_rank,
+                    "admission_status": app.admission_status
+                },
+                "student_profile": {
+                    "first_name": app.child_first_name,
+                    "surname": app.child_surname,
+                    "date_of_birth": str(app.date_of_birth) if app.date_of_birth else "-",
+                    "gender": getattr(app, 'child_gender', '-'),
+                    "blood_group": getattr(app, 'child_blood_group', '-'),
+                    "birth_place": f"{app.birth_place_city or ''} {app.birth_place_district or ''}".strip() or "-",
+                    "mother_tongue": app.mother_tongue_mother or app.mother_tongue_father or "-",
+                    "nationality": app.father_nationality or app.mother_nationality or "Indian",
+                    "photo_url": app.photograph_child.url if app.photograph_child else None
+                },
+                "parent_profile": {
+                    "father_name": app.father_name,
+                    "father_surname": app.father_surname,
+                    "father_qualification": app.father_education,
+                    "father_occupation": app.father_occupation,
+                    "father_annual_income": app.father_annual_income,
+                    "father_mobile": app.father_whatsapp,
+                    "father_email": app.father_email,
+                    "mother_name": app.mother_name,
+                    "mother_surname": app.mother_surname,
+                    "mother_qualification": app.mother_education,
+                    "mother_occupation": app.mother_occupation,
+                    "mother_annual_income": app.mother_annual_income,
+                    "mother_mobile": app.mother_whatsapp,
+                    "mother_email": app.mother_email,
+                    "residential_address": app.father_address_residence or app.mother_address_residence or "-",
+                    "office_address": app.father_address_office or app.mother_address_office or "-"
+                },
+                "assessment_scores": {
+                    "part_x": {
+                        "alak_malak": app.alak_malak_score,
+                        "parent_mcq": app.mcq_score_part_x,
+                        "sibling_vk": app.sibling_score,
+                        "total_part_x": app.total_part_x_score
+                    },
+                    "part_y": {
+                        "evaluator": app.evaluator.full_name or app.evaluator.username if app.evaluator else "-",
+                        "m_category": app.evaluator_m,
+                        "mi_category": app.evaluator_mi,
+                        "cognitive_1": app.cognitive_assessment_1,
+                        "cognitive_2": app.cognitive_assessment_2,
+                        "affective": app.affective_assessment,
+                        "psychomotor": app.psychomotor_assessment,
+                        "total_part_y": app.total_part_y_score
+                    },
+                    "final_score": app.final_aggregate_score
+                },
+                "signatures_and_declarations": {
+                    "agreed_to_rules": app.agreed_to_rules,
+                    "terms_agreed_date": str(app.terms_agreed_date) if app.terms_agreed_date else "-",
+                    "father_signature_url": app.father_signature.url if app.father_signature else None,
+                    "mother_signature_url": app.mother_signature.url if app.mother_signature else None,
+                    "guardian_signature_url": app.guardian_signature.url if app.guardian_signature else None
+                }
+            })
+
+        return Response({
+            "status": "success",
+            "total_rendered": len(forms_data),
+            "forms": forms_data
+        }, status=status.HTTP_200_OK)
+
+
+class AdminAcademicYearRollView(APIView):
+    """
+    Step 8: New Academic Year Reset & Archival
+    GET: Summary of current active academic season.
+    POST: Archive current applications and rollover to next academic year.
+    Endpoint: /api/admin/academic-year/rollover/
+    """
+    def get(self, request):
+        denied = enforce_admin_token(request)
+        if denied:
+            return denied
+
+        total_enquiries = QuizSubmission.objects.count()
+        total_applications = AdmissionApplication.objects.count()
+        total_selected = AdmissionApplication.objects.filter(admission_status='SELECTED').count()
+        total_waitlisted = AdmissionApplication.objects.filter(admission_status='WAITLISTED').count()
+
+        return Response({
+            "status": "success",
+            "current_season": "2026-2027",
+            "statistics": {
+                "total_enquiries": total_enquiries,
+                "total_applications": total_applications,
+                "selected_admissions": total_selected,
+                "waitlisted_admissions": total_waitlisted
+            },
+            "ready_for_next_year": True
+        }, status=status.HTTP_200_OK)
+

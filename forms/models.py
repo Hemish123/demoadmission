@@ -247,6 +247,51 @@ class AdmissionApplication(models.Model):
     interaction_time = models.CharField(max_length=50, blank=True, help_text="e.g. 9:00 AM TO 10:00 AM")
     interaction_venue = models.CharField(max_length=150, default="Shreyas Foundation – Main Office", blank=True)
     interaction_whatsapp_sent = models.BooleanField(default=False)
+    parent_confirmed_slot = models.BooleanField(default=False, help_text="Parent confirmed slot via WhatsApp/Portal")
+
+    # Assessment & Scores (PART X + PART Y)
+    # PART X (Total: 20 Marks)
+    alak_malak_months = models.IntegerField(default=0, help_text="0, 6 (5 marks), or 12 (10 marks)")
+    alak_malak_score = models.FloatField(default=0.0, help_text="0, 5, or 10")
+    mcq_score_part_x = models.FloatField(default=0.0, help_text="Score out of 7 from Parent MCQ")
+    sibling_opted_vk = models.BooleanField(default=False, help_text="Sibling opted for VK1/VK2/VK3 (+3 marks if receipt uploaded)")
+    sibling_score = models.FloatField(default=0.0, help_text="0 or 3 marks")
+    total_part_x_score = models.FloatField(default=0.0, help_text="Part X score out of 20")
+
+    # PART Y (Total: 30 Marks)
+    evaluator = models.ForeignKey(
+        'AdminUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="evaluations_done",
+        help_text="Educator/Academician who evaluated"
+    )
+    evaluator_m = models.CharField(max_length=100, blank=True, help_text="M assessment tag/notes")
+    evaluator_mi = models.CharField(max_length=100, blank=True, help_text="MI assessment tag/notes")
+    cognitive_assessment_1 = models.FloatField(default=0.0, help_text="Cognitive Part 1 (out of 5)")
+    cognitive_assessment_2 = models.FloatField(default=0.0, help_text="Cognitive Part 2 (out of 5)")
+    affective_assessment = models.FloatField(default=0.0, help_text="Affective (out of 10)")
+    psychomotor_assessment = models.FloatField(default=0.0, help_text="Psychomotor (out of 10)")
+    total_part_y_score = models.FloatField(default=0.0, help_text="Part Y score out of 30")
+
+    # Aggregate & Merit
+    final_aggregate_score = models.FloatField(default=0.0, help_text="Part X (20) + Part Y (30) = Total 50")
+    merit_rank = models.IntegerField(null=True, blank=True, help_text="Rank within Medium x Standard")
+    admission_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('SUBMITTED', 'Submitted'),
+            ('SCHEDULED', 'Scheduled'),
+            ('EVALUATED', 'Evaluated'),
+            ('SELECTED', 'Selected'),
+            ('WAITLISTED', 'Waitlisted'),
+            ('CANCELLED', 'Cancelled'),
+            ('REJECTED', 'Rejected'),
+        ],
+        default='SCHEDULED',
+        help_text="First 80 are SELECTED; beyond cutoff are WAITLISTED; cancellations pass to next"
+    )
 
     form_submitted_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when complete admission form was submitted")
     created_at = models.DateTimeField(auto_now_add=True)

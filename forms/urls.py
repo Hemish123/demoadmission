@@ -11,7 +11,13 @@ from .views import (
     ForgotPinVerifyAndResetView,
     AdminInteractionCalendarView,
     AdminExportDataView,
-    AdminAuditLogView
+    AdminAuditLogView,
+    AdminEvaluationAssessmentView,
+    AdminMeritBoardView,
+    AdminMeritCancellationView,
+    ParentConfirmInteractionSlotView,
+    AdminPrintPhysicalFormView,
+    AdminAcademicYearRollView
 )
 
 urlpatterns = [
@@ -25,8 +31,25 @@ urlpatterns = [
     path('admin/forgot-pin/request-otp/', ForgotPinRequestOTPView.as_view(), name='admin-forgot-pin-otp'),
     path('admin/forgot-pin/reset/', ForgotPinVerifyAndResetView.as_view(), name='admin-forgot-pin-reset'),
 
-    # Step 8: Interaction Calendar for Admin
+    # Step 1: Interaction Calendar for Admin
     path('admin/interaction-calendar/', AdminInteractionCalendarView.as_view(), name='admin-interaction-calendar'),
+
+    # Step 2 & 3: Digital Assessment Form for Academicians & Educators
+    path('admin/evaluation/<int:application_id>/', AdminEvaluationAssessmentView.as_view(), name='admin-evaluation-assessment'),
+
+    # Step 5 & 6: Merit Board, Rating & Cutoff (First 80 selected, waitlist rollover on cancellation)
+    path('admin/merit-board/', AdminMeritBoardView.as_view(), name='admin-merit-board'),
+    path('admin/merit-board/cancel/<int:application_id>/', AdminMeritCancellationView.as_view(), name='admin-merit-cancel'),
+
+    # Step 7: Print Physical Form Layout
+    path('admin/applications/<int:application_id>/print/', AdminPrintPhysicalFormView.as_view(), name='admin-print-application'),
+    path('admin/applications/print-bulk/', AdminPrintPhysicalFormView.as_view(), name='admin-print-bulk'),
+
+    # Step 8: Academic Year Archival & Rollover
+    path('admin/academic-year/rollover/', AdminAcademicYearRollView.as_view(), name='admin-academic-year-roll'),
+
+    # Parent Slot Confirmation (via WhatsApp or Portal)
+    path('admission-form/confirm-slot/', ParentConfirmInteractionSlotView.as_view(), name='parent-confirm-slot'),
 
     # Export Data API (Excel & CSV for Enquiries, Submitted Apps, Pending Forms)
     path('admin/export/', AdminExportDataView.as_view(), name='admin-export'),
