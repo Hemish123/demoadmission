@@ -1,14 +1,55 @@
+from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
 from .models import QuizSubmission, AdmissionApplication, AdminUser, AuditLog
 
 
+class AdminUserForm(forms.ModelForm):
+    pin = forms.CharField(
+        widget=forms.PasswordInput(render_value=False),
+        required=False,
+        help_text="Enter a 4-6 digit numeric PIN. (Leave blank if you don't want to change existing PIN)"
+    )
+
+    class Meta:
+        model = AdminUser
+        fields = ('username', 'full_name', 'email', 'role', 'is_active', 'pin')
+
+    def clean_pin(self):
+        pin = self.cleaned_data.get('pin')
+        if not self.instance.pk and not pin:
+            raise forms.ValidationError("PIN is required when creating a new Admin User.")
+        if pin:
+            if not pin.isdigit():
+                raise forms.ValidationError("PIN must contain digits only.")
+            if len(pin) < 4 or len(pin) > 6:
+                raise forms.ValidationError("PIN must be between 4 and 6 digits.")
+        return pin
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        pin = self.cleaned_data.get('pin')
+        if pin:
+            user.set_pin(pin)
+        if commit:
+            user.save()
+        return user
+
+
 @admin.register(AdminUser)
 class AdminUserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'username', 'full_name', 'email', 'role', 'is_active', 'created_at', 'updated_at')
+    form = AdminUserForm
+    list_display = ('id', 'username', 'full_name', 'email', 'role', 'is_active', 'has_pin_display', 'created_at', 'updated_at')
     list_filter = ('role', 'is_active', 'created_at')
     search_fields = ('username', 'full_name', 'email')
     readonly_fields = ('pin_hash', 'otp_code', 'otp_expires_at', 'created_at', 'updated_at')
+    fields = ('username', 'full_name', 'email', 'role', 'is_active', 'pin', 'pin_hash', 'otp_code', 'otp_expires_at', 'created_at', 'updated_at')
+
+    def has_pin_display(self, obj):
+        if obj.pin_hash:
+            return format_html('<span style="color: green; font-weight: bold;">&#10004; Set</span>')
+        return format_html('<span style="color: red; font-weight: bold;">&#10008; Not Set</span>')
+    has_pin_display.short_description = "PIN Status"
 
 
 @admin.register(AuditLog)
