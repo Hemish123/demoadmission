@@ -81,6 +81,12 @@ class QuizSubmission(models.Model):
     whatsapp_link_sent = models.BooleanField(default=False)
     reminder_sent_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when one-time 7:00 AM WhatsApp reminder was sent")
     quiz_completed_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when parent completed the quiz")
+
+    # Auto-save Drafts (Quiz questionnaire & Admission form)
+    quiz_draft_answers = models.JSONField(default=dict, blank=True, help_text="Auto-saved draft answers for parental questionnaire")
+    admission_form_draft = models.JSONField(default=dict, blank=True, help_text="Auto-saved draft state for admission form")
+    last_draft_saved_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when draft was last autosaved")
+
     created_by = models.ForeignKey(
         'AdminUser',
         on_delete=models.SET_NULL,

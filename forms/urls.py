@@ -3,6 +3,7 @@ from .views import (
     SubmitQuizView,
     VerifyPaymentAndSendWhatsAppView,
     AdmissionFormEligibilityCheckView,
+    AdmissionFormAutoSaveDraftView,
     AdmissionApplicationView,
     AdminUserManagementView,
     AdminLoginView,
@@ -63,7 +64,8 @@ urlpatterns = [
     path('add-enquiry/', SubmitQuizView.as_view(), name='add-enquiry'),
     path('verify-payment/', VerifyPaymentAndSendWhatsAppView.as_view(), name='verify-payment'),
 
-    # Admission Form
+    # Admission Form & Auto-save Draft
     path('admission-form/check-eligibility/', AdmissionFormEligibilityCheckView.as_view(), name='check-form-eligibility'),
+    path('admission-form/autosave/', AdmissionFormAutoSaveDraftView.as_view(), name='admission-form-autosave'),
     path('admission-form/', AdmissionApplicationView.as_view(), name='admission-form'),
 ]

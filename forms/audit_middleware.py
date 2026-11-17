@@ -92,9 +92,9 @@ class AuditLogMiddleware(MiddlewareMixin):
 
         # If this is a Guest request (e.g. Parent submitting quiz or admission form)
         if actor_role == "GUEST":
-            if extracted_sub_id:
+            if extracted_sub_id and str(extracted_sub_id).isdigit():
                 from .models import QuizSubmission
-                sub = QuizSubmission.objects.filter(id=extracted_sub_id).first()
+                sub = QuizSubmission.objects.filter(id=int(extracted_sub_id)).first()
                 if sub:
                     c_name = sub.child_name or extracted_child_name
                     actor_username = f"Applicant #{sub.id} ({c_name})" if c_name else f"Applicant #{sub.id}"
@@ -103,6 +103,9 @@ class AuditLogMiddleware(MiddlewareMixin):
                 else:
                     actor_username = f"Applicant #{extracted_sub_id}"
                     actor_role = f"GUEST (ID: {extracted_sub_id})"
+            elif extracted_sub_id:
+                actor_username = f"Applicant #{extracted_sub_id}"
+                actor_role = f"GUEST"
             elif response.status_code in [200, 201] and getattr(response, 'data', None) and isinstance(response.data, dict):
                 # If newly created submission ID in response
                 resp_sub_id = response.data.get('submission_id') or response.data.get('id')

@@ -1113,12 +1113,21 @@ class SubmitQuizView(APIView):
                     "message": f"Quiz has already been completed for this student with score {submission.score}/7 ({submission.tag}). Re-attempting the quiz is not allowed."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Grade the questionnaire using 2027-28 Parental Partnership Evaluation Rubric
-            eval_result = score_parent_questionnaire(answers)
+            # Grade the questionnaire using 2027-28 Parental Partnership Evaluation Rubric (with AI grading for Q11-Q14)
+            eval_result = score_parent_questionnaire(
+                answers=answers,
+                use_ai=True,
+                child_name=submission.child_name,
+                standard=submission.standard
+            )
             mcq_marks = eval_result["mcq_score"]  # Out of 30
             written_marks = eval_result["written_score"]  # Out of 20
             total_score = eval_result["total_score"]  # Out of 50
             breakdown = eval_result["breakdown"]
+
+            # Store AI evaluations inside answers for future educator review
+            if eval_result.get("ai_evaluations"):
+                answers["ai_evaluations"] = eval_result["ai_evaluations"]
 
             # Eligibility: Minimum 25 marks out of 50 (50%) to pass screening
             is_eligible = total_score >= 25
@@ -1153,7 +1162,8 @@ class SubmitQuizView(APIView):
                 "payment_status": submission.payment_status,
                 "message": f"Questionnaire completed! Score: {int(total_score)}/50 ({tag}). You can now proceed to fill the admission form.",
                 "breakdown": breakdown,
-                "written_responses": eval_result.get("written_responses", {})
+                "written_responses": eval_result.get("written_responses", {}),
+                "ai_evaluations": eval_result.get("ai_evaluations", {})
             }, status=status.HTTP_200_OK)
 
         # New enquiry creation (Admin Side) -> Token is mandatory
@@ -1470,6 +1480,9 @@ class AdmissionFormEligibilityCheckView(APIView):
             "tag": submission.tag,
             "vibhag": submission.vibhag,
             "message": "Eligible to fill admission form.",
+            "draft_saved_at": submission.last_draft_saved_at,
+            "saved_draft": submission.admission_form_draft or {},
+            "saved_quiz_draft": submission.quiz_draft_answers or {},
             "prefilled_data": {
                 "standard": submission.standard,
                 "medium": submission.medium,
@@ -1492,6 +1505,173 @@ class AdmissionFormEligibilityCheckView(APIView):
                 "language": submission.language or "gu",
                 "is_locked_for_user": True
             }
+        }, status=status.HTTP_200_OK)
+
+
+class AdmissionFormAutoSaveDraftView(APIView):
+    """
+    Auto-save Draft API for Parents filling Questionnaire or Admission Form.
+    Endpoint: /api/admission-form/autosave/
+    Methods:
+      GET: Retrieve auto-saved draft for a submission_id
+           Query: ?submission_id=123&type=all (or type=quiz / type=form)
+      POST: Auto-save draft progress as user types or advances steps
+           Body:
+           {
+               "submission_id": 123,
+               "draft_type": "all",  // "quiz", "form", or "all"
+               "quiz_draft": { "1": "B", "2": "A", "11": "..." },
+               "form_draft": { "birth_place_city": "Ahmedabad", "father_occupation": "Doctor", ... }
+           }
+    """
+    def get(self, request):
+        submission_id = request.query_params.get("submission_id")
+        if not submission_id:
+            return Response({
+                "status": "error",
+                "message": "submission_id query parameter is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        submission = QuizSubmission.objects.filter(id=submission_id).first()
+        if not submission:
+            return Response({
+                "status": "error",
+                "message": f"Submission {submission_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        draft_type = (request.query_params.get("type") or "all").lower()
+        response_data = {
+            "status": "success",
+            "submission_id": submission.id,
+            "last_draft_saved_at": submission.last_draft_saved_at,
+            "qa_status": submission.qa_status,
+            "has_submitted_final_form": hasattr(submission, 'admission_application') and bool(submission.admission_application)
+        }
+
+        if draft_type in ["quiz", "all"]:
+            response_data["quiz_draft"] = submission.quiz_draft_answers or {}
+        if draft_type in ["form", "all"]:
+            response_data["form_draft"] = submission.admission_form_draft or {}
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            submission_id = request.data.get("submission_id")
+            if not submission_id:
+                return Response({
+                    "status": "error",
+                    "error_code": "MISSING_SUBMISSION_ID",
+                    "message": "submission_id is required in the request payload for autosaving."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Ensure valid integer submission_id
+            try:
+                sub_id_int = int(submission_id)
+            except (ValueError, TypeError):
+                return Response({
+                    "status": "error",
+                    "error_code": "INVALID_SUBMISSION_ID",
+                    "message": f"Invalid submission_id '{submission_id}'. Must be a valid integer ID."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            submission = QuizSubmission.objects.filter(id=sub_id_int).first()
+            if not submission:
+                return Response({
+                    "status": "error",
+                    "error_code": "SUBMISSION_NOT_FOUND",
+                    "message": f"Quiz submission with ID {sub_id_int} does not exist."
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # If final application already submitted, don't allow modifying draft
+            if hasattr(submission, 'admission_application') and submission.admission_application:
+                return Response({
+                    "status": "error",
+                    "error_code": "ALREADY_SUBMITTED",
+                    "already_submitted": True,
+                    "application_number": submission.admission_application.application_number,
+                    "message": f"Admission application already submitted (App No: {submission.admission_application.application_number}). Draft can no longer be edited."
+                }, status=status.HTTP_409_CONFLICT)
+
+            draft_type = str(request.data.get("draft_type") or "all").lower().strip()
+            if draft_type not in ["quiz", "form", "all"]:
+                return Response({
+                    "status": "error",
+                    "error_code": "INVALID_DRAFT_TYPE",
+                    "message": f"Invalid draft_type '{draft_type}'. Must be one of: 'quiz', 'form', or 'all'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            quiz_draft = request.data.get("quiz_draft")
+            form_draft = request.data.get("form_draft")
+
+            if quiz_draft is None and form_draft is None:
+                return Response({
+                    "status": "error",
+                    "error_code": "NO_DRAFT_DATA",
+                    "message": "Neither 'quiz_draft' nor 'form_draft' data was provided to save."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            updated_fields = ['last_draft_saved_at']
+            submission.last_draft_saved_at = timezone.now()
+
+            # Validate quiz_draft is dict if provided
+            if quiz_draft is not None:
+                if not isinstance(quiz_draft, dict):
+                    return Response({
+                        "status": "error",
+                        "error_code": "INVALID_QUIZ_FORMAT",
+                        "message": "'quiz_draft' must be a valid key-value JSON object."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                if draft_type in ["quiz", "all"]:
+                    current_q = submission.quiz_draft_answers or {}
+                    current_q.update(quiz_draft)
+                    submission.quiz_draft_answers = current_q
+                    updated_fields.append('quiz_draft_answers')
+
+            # Validate form_draft is dict if provided
+            if form_draft is not None:
+                if not isinstance(form_draft, dict):
+                    return Response({
+                        "status": "error",
+                        "error_code": "INVALID_FORM_FORMAT",
+                        "message": "'form_draft' must be a valid key-value JSON object."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                if draft_type in ["form", "all"]:
+                    current_f = submission.admission_form_draft or {}
+                    current_f.update(form_draft)
+                    submission.admission_form_draft = current_f
+                    updated_fields.append('admission_form_draft')
+
+            submission.save(update_fields=updated_fields)
+            logger.info(f"[AUTOSAVE SUCCESS] Submission {sub_id_int} draft saved at {submission.last_draft_saved_at}")
+
+            return Response({
+                "status": "success",
+                "message": "Draft auto-saved successfully.",
+                "submission_id": submission.id,
+                "last_draft_saved_at": submission.last_draft_saved_at,
+                "quiz_draft_saved": bool(quiz_draft is not None),
+                "form_draft_saved": bool(form_draft is not None)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception(f"[AUTOSAVE UNEXPECTED ERROR] {str(e)}")
+            return Response({
+                "status": "error",
+                "error_code": "SERVER_ERROR",
+                "message": "An unexpected server error occurred while auto-saving the draft. Please try again."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        submission.save(update_fields=updated_fields)
+        logger.info(f"[AUTOSAVE] Submission {submission_id} progress autosaved at {submission.last_draft_saved_at}")
+
+        return Response({
+            "status": "success",
+            "message": "Draft auto-saved successfully.",
+            "submission_id": submission.id,
+            "last_draft_saved_at": submission.last_draft_saved_at,
+            "quiz_draft_saved": bool(quiz_draft is not None),
+            "form_draft_saved": bool(form_draft is not None)
         }, status=status.HTTP_200_OK)
 
 
@@ -1902,13 +2082,16 @@ class AdminEvaluationAssessmentView(APIView):
         from .evaluation_service import calculate_part_x_score
         calculate_part_x_score(application, save=True)
 
-        # Extract written responses from submission if available
+        # Extract written responses and any AI evaluations from submission
         written_answers = {}
+        ai_evaluations = {}
         if application.submission and application.submission.answers:
+            answers_dict = application.submission.answers
             for q_id in [11, 12, 13, 14]:
-                ans_text = application.submission.answers.get(str(q_id)) or application.submission.answers.get(q_id)
+                ans_text = answers_dict.get(str(q_id)) or answers_dict.get(q_id)
                 if ans_text:
                     written_answers[str(q_id)] = ans_text
+            ai_evaluations = answers_dict.get("ai_evaluations", {})
 
         return Response({
             "status": "success",
@@ -1926,6 +2109,7 @@ class AdminEvaluationAssessmentView(APIView):
                 "parent_whatsapp": application.father_whatsapp or application.mother_whatsapp,
             },
             "parent_written_responses": written_answers,
+            "ai_written_evaluations": ai_evaluations,
             "part_x": {
                 "max_marks": 20,
                 "alak_malak_months": application.alak_malak_months,

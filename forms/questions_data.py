@@ -220,11 +220,16 @@ QUESTIONNAIRE_QUESTIONS = [
 ]
 
 
-def score_parent_questionnaire(answers: dict) -> dict:
+def score_parent_questionnaire(
+    answers: dict,
+    use_ai: bool = True,
+    child_name: str = "",
+    standard: str = ""
+) -> dict:
     """
     Evaluates parent questionnaire answers against official 2027-28 rubric:
     - 10 MCQs x 3 Marks = 30 Marks max
-    - 4 Written Questions x 5 Marks = 20 Marks max (evaluated or default baseline)
+    - 4 Written Questions x 5 Marks = 20 Marks max (evaluated via GPT-4o AI service)
     Returns:
     {
         "mcq_score": float (0-30),
@@ -232,7 +237,8 @@ def score_parent_questionnaire(answers: dict) -> dict:
         "total_score": float (0-50),
         "mcq_scaled_to_7": float (scaled for Part X),
         "breakdown": {q_id: {"selected": "...", "score": 3, "max": 3}},
-        "written_responses": {q_id: "..."}
+        "written_responses": {q_id: "..."},
+        "ai_evaluations": {q_id: {"score": 4.5, "feedback": "..."}}
     }
     """
     mcq_total = 0
@@ -258,21 +264,38 @@ def score_parent_questionnaire(answers: dict) -> dict:
         }
 
     # Extract written answers (Q11 to Q14)
-    written_total = 0
     for q_id in WRITTEN_QUESTION_IDS:
         q_key_str = str(q_id)
         resp_text = str(answers.get(q_key_str) or answers.get(q_id) or "").strip()
         written_responses[q_id] = resp_text
 
-        # If manual written marks are already provided in answers under 'written_marks'
-        manual_marks = (answers.get("written_marks") or {}).get(str(q_id))
-        if manual_marks is not None:
-            written_total += min(max(float(manual_marks), 0.0), 5.0)
-        elif len(resp_text) >= 50:
-            # Baseline placeholder: 3 marks for substantive written response pending evaluator grading
-            written_total += 3.0
-        elif len(resp_text) > 0:
-            written_total += 1.0
+    # Evaluate written responses:
+    # 1. First check if explicit educator/manual marks were passed
+    manual_written_marks = answers.get("written_marks") or {}
+    ai_evaluations = {}
+
+    if any(manual_written_marks.get(str(qid)) is not None for qid in WRITTEN_QUESTION_IDS):
+        written_total = 0.0
+        for q_id in WRITTEN_QUESTION_IDS:
+            m = manual_written_marks.get(str(q_id))
+            if m is not None:
+                written_total += min(max(float(m), 0.0), 5.0)
+    elif use_ai:
+        # 2. Use GPT-4o AI Evaluation Service
+        from .ai_evaluation_service import evaluate_written_answers_with_ai
+        ai_result = evaluate_written_answers_with_ai(
+            written_responses=written_responses,
+            child_name=child_name,
+            standard=standard
+        )
+        written_total = float(ai_result.get("total_written_score", 0.0))
+        ai_evaluations = ai_result.get("evaluations", {})
+    else:
+        # 3. Baseline heuristic fallback
+        from .ai_evaluation_service import _fallback_heuristic_evaluation
+        ai_result = _fallback_heuristic_evaluation(written_responses)
+        written_total = float(ai_result.get("total_written_score", 0.0))
+        ai_evaluations = ai_result.get("evaluations", {})
 
     total_questionnaire_score = round(mcq_total + written_total, 2)
     # Scaled to 7 for Part X background score (MCQ portion: 30 marks mapped to 7)
@@ -285,5 +308,6 @@ def score_parent_questionnaire(answers: dict) -> dict:
         "max_score": 50,
         "mcq_scaled_to_7": mcq_scaled_to_7,
         "breakdown": breakdown,
-        "written_responses": written_responses
+        "written_responses": written_responses,
+        "ai_evaluations": ai_evaluations
     }
