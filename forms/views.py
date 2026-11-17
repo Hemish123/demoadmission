@@ -1120,8 +1120,8 @@ class SubmitQuizView(APIView):
             total_score = eval_result["total_score"]  # Out of 50
             breakdown = eval_result["breakdown"]
 
-            # Eligibility: Minimum 12 marks out of 30 in MCQs (40%) to pass screening
-            is_eligible = mcq_marks >= 12
+            # Eligibility: Minimum 25 marks out of 50 (50%) to pass screening
+            is_eligible = total_score >= 25
             qa_status = "PASSED" if is_eligible else "FAILED"
             tag = get_performance_tag(int(total_score), max_score=50)
 
@@ -1189,7 +1189,8 @@ class SubmitQuizView(APIView):
             eval_result = score_parent_questionnaire(answers)
             score = int(eval_result["total_score"])
             mcq_marks = eval_result["mcq_score"]
-            is_eligible = mcq_marks >= 12
+            # Eligibility: Minimum 25 marks out of 50 (50%) to pass screening
+            is_eligible = score >= 25
             qa_status = "PASSED" if is_eligible else "FAILED"
             tag = get_performance_tag(score, max_score=50)
             breakdown = eval_result["breakdown"]
@@ -1257,7 +1258,7 @@ class SubmitQuizView(APIView):
         elif is_eligible:
             message = f"Congratulations! You scored {score}/50 ({tag}) for Vibhag: {vibhag}. You are eligible to fill the admission form."
         else:
-            message = f"You have scored {score}/50 ({tag}). Minimum 12 marks in MCQs are required to be eligible for admission."
+            message = f"You have scored {score}/50 ({tag}). Minimum 25 marks (50%) are required to be eligible for admission."
 
         return Response({
             "status": "success",
