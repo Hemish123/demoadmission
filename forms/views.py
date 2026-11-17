@@ -1653,8 +1653,21 @@ class AdmissionApplicationView(APIView):
             }, status=status.HTTP_201_CREATED)
 
         logger.error(f"[POST /api/admission-form/] VALIDATION FAILED! Errors: {serializer.errors}")
+
+        # Human-readable error message summarizing file format/upload issues for the user
+        readable_errors = []
+        for field, err_list in serializer.errors.items():
+            first_err = str(err_list[0]) if isinstance(err_list, (list, tuple)) and len(err_list) > 0 else str(err_list)
+            if 'upload a valid image' in first_err.lower():
+                readable_errors.append(f"Field '{field}': Please upload a valid image file (.jpg, .jpeg, .png, .webp). PDF files or Word documents are not accepted for photographs/signatures.")
+            elif 'invalid format' in first_err.lower() or 'only image files' in first_err.lower():
+                readable_errors.append(f"Field '{field}': {first_err}")
+            else:
+                readable_errors.append(f"{field}: {first_err}")
+
         return Response({
             "status": "error",
+            "message": " | ".join(readable_errors) if readable_errors else "Validation failed for admission application form.",
             "errors": serializer.errors
         }, status=status.HTTP_400_BAD_REQUEST)
 

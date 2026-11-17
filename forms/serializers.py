@@ -209,6 +209,51 @@ class SubmitQuizSerializer(serializers.Serializer):
 
 
 
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp')
+DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp')
+
+def validate_uploaded_image(file_obj, field_name: str):
+    """
+    Validates that the uploaded file is strictly an image (JPG, JPEG, PNG, WEBP).
+    Rejects PDF, DOC, DOCX or corrupted image files.
+    """
+    if not file_obj or isinstance(file_obj, str):
+        return
+
+    file_name = getattr(file_obj, 'name', '').lower()
+    if file_name and not file_name.endswith(IMAGE_EXTENSIONS):
+        raise serializers.ValidationError({
+            field_name: f"Invalid format for {field_name}. Only image files ({', '.join(IMAGE_EXTENSIONS)}) are allowed. PDF or Word documents are not accepted."
+        })
+
+    # Validate image integrity using Pillow
+    try:
+        from PIL import Image
+        initial_pos = file_obj.tell() if hasattr(file_obj, 'tell') else 0
+        img = Image.open(file_obj)
+        img.verify()
+        if hasattr(file_obj, 'seek'):
+            file_obj.seek(initial_pos)
+    except Exception:
+        raise serializers.ValidationError({
+            field_name: f"Corrupted or invalid image file uploaded for {field_name}. Please upload a valid JPG/PNG/WEBP image."
+        })
+
+
+def validate_uploaded_document(file_obj, field_name: str):
+    """
+    Validates that the uploaded file is a valid Document (PDF, DOC, DOCX) or clear document scan/image (JPG, PNG).
+    """
+    if not file_obj or isinstance(file_obj, str):
+        return
+
+    file_name = getattr(file_obj, 'name', '').lower()
+    if file_name and not file_name.endswith(DOCUMENT_EXTENSIONS):
+        raise serializers.ValidationError({
+            field_name: f"Invalid file format for {field_name}. Only PDF, DOC, DOCX, or scanned images (JPG/PNG/WEBP) are allowed."
+        })
+
+
 class AdmissionApplicationSerializer(serializers.ModelSerializer):
     submission_id = serializers.IntegerField(write_only=True, required=False)
     child_first_name = serializers.CharField(required=False, allow_blank=True)
@@ -312,6 +357,25 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "signatures": "At least one signature (Mother, Father, or Guardian) is required."
                 })
+
+        # -------------------------------------------------------------
+        # File Formats Validation:
+        # Strictly Images (JPG, JPEG, PNG, WEBP) for Photo & Signatures
+        # Documents (PDF, DOC, DOCX, JPG, PNG) for Certificates & Reports
+        # -------------------------------------------------------------
+        image_fields = ['photograph_child', 'mother_signature', 'father_signature', 'guardian_signature']
+        for img_field in image_fields:
+            if attrs.get(img_field):
+                validate_uploaded_image(attrs.get(img_field), img_field)
+
+        doc_fields = [
+            'birth_certificate', 'parent_aadhar_card', 'child_aadhar_card',
+            'health_certificate', 'eye_checkup_certificate', 'caste_certificate',
+            'previous_report_card', 'alak_malak_certificate'
+        ]
+        for doc_field in doc_fields:
+            if attrs.get(doc_field):
+                validate_uploaded_document(attrs.get(doc_field), doc_field)
 
         # Pre-fill automatic population & protection for users
         request = self.context.get('request')
