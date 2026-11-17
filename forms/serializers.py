@@ -260,11 +260,46 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
     vibhag = serializers.CharField(required=False, allow_blank=True)
     added_by = serializers.SerializerMethodField()
     created_by_user = serializers.SerializerMethodField()
+    quiz_answers = serializers.SerializerMethodField()
+    quiz_details = serializers.SerializerMethodField()
 
     class Meta:
         model = AdmissionApplication
         fields = '__all__'
         read_only_fields = ('application_number', 'created_at')
+
+    def get_quiz_answers(self, obj):
+        """Returns the parent's submitted answers dictionary { '1': 'B', ..., '11': '...' }"""
+        if obj.submission and obj.submission.answers:
+            return obj.submission.answers
+        return {}
+
+    def get_quiz_details(self, obj):
+        """Returns structured questionnaire summary including MCQ score, written responses, and AI evaluations"""
+        if not obj.submission:
+            return None
+
+        sub = obj.submission
+        answers = sub.answers or {}
+        ai_evals = answers.get("ai_evaluations", {})
+        
+        # Split MCQs vs Written responses
+        mcq_answers = {str(k): v for k, v in answers.items() if str(k).isdigit() and int(k) <= 10}
+        written_answers = {str(k): v for k, v in answers.items() if str(k).isdigit() and int(k) in [11, 12, 13, 14]}
+
+        return {
+            "submission_id": sub.id,
+            "score": sub.score,
+            "total_marks": 50,
+            "qa_status": sub.qa_status,
+            "tag": sub.tag,
+            "is_eligible": sub.is_eligible,
+            "quiz_completed_at": sub.quiz_completed_at,
+            "answers": answers,
+            "mcq_answers": mcq_answers,
+            "written_answers": written_answers,
+            "ai_evaluations": ai_evals
+        }
 
     def get_added_by(self, obj):
         if obj.submission and obj.submission.created_by:
