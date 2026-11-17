@@ -18,7 +18,14 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import QuizSubmission, AdmissionApplication, AdminUser, AuditLog
 from .jwt_auth import generate_jwt_token, decode_jwt_token, get_admin_user_from_token
-from .questions_data import ALIGNED_ANSWERS
+from .questions_data import (
+    ALIGNED_ANSWERS,
+    PARENT_MCQ_SCORING_MATRIX,
+    QUESTIONNAIRE_QUESTIONS,
+    score_parent_questionnaire,
+    TOTAL_QUESTIONNAIRE_MARKS,
+    TOTAL_MCQ_MARKS
+)
 from .serializers import (
     SubmitQuizSerializer,
     QuizSubmissionListSerializer,
@@ -39,14 +46,23 @@ logger = logging.getLogger(__name__)
 # Helper Functions
 # ==============================================================================
 
-def get_performance_tag(score: int) -> str:
-    if score == 7:
+def get_performance_tag(score: int, max_score: int = 50) -> str:
+    """
+    Performance tag based on percentage of score.
+    Supports both 50-mark questionnaire and legacy 7-mark screening.
+    """
+    if max_score > 0:
+        pct = (score / float(max_score)) * 100.0
+    else:
+        pct = 0.0
+
+    if pct >= 85:
         return "Outstanding"
-    elif score == 6:
+    elif pct >= 70:
         return "Excellent"
-    elif score == 5:
+    elif pct >= 55:
         return "Very Good"
-    elif score == 4:
+    elif pct >= 40:
         return "Good"
     else:
         return "Needs Improvement"
@@ -968,9 +984,23 @@ class AdminAuditLogView(APIView):
 class SubmitQuizView(APIView):
     """
     GET: List all quiz submissions (Enquiries) for Admin Dashboard (Token Required)
+         OR Fetch Questionnaire structure with ?view=questions (Public)
     POST: Submit enquiry (Admin side with Token) OR Quiz answers (Parent side with submission_id)
     """
     def get(self, request):
+        if request.query_params.get("view") == "questions" or request.query_params.get("action") == "questions":
+            lang = request.query_params.get("lang", "en").lower()
+            return Response({
+                "status": "success",
+                "academic_year": "2027–28",
+                "title": "SHREYAS FOUNDATION - PARENTAL UNDERSTANDING & PARTNERSHIP QUESTIONNAIRE",
+                "total_marks": TOTAL_QUESTIONNAIRE_MARKS,
+                "mcq_marks": TOTAL_MCQ_MARKS,
+                "written_marks": 20,
+                "language": lang,
+                "questions": QUESTIONNAIRE_QUESTIONS
+            }, status=status.HTTP_200_OK)
+
         denied = enforce_admin_token(request)
         if denied:
             return denied
@@ -1083,22 +1113,21 @@ class SubmitQuizView(APIView):
                     "message": f"Quiz has already been completed for this student with score {submission.score}/7 ({submission.tag}). Re-attempting the quiz is not allowed."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            score = 0
-            breakdown = {}
-            for q_id, correct_ans in ALIGNED_ANSWERS.items():
-                user_ans = answers.get(str(q_id)) or answers.get(q_id)
-                if user_ans and str(user_ans).strip().upper() == correct_ans:
-                    score += 1
-                    breakdown[q_id] = {"selected": user_ans, "matched": True}
-                else:
-                    breakdown[q_id] = {"selected": user_ans, "matched": False}
+            # Grade the questionnaire using 2027-28 Parental Partnership Evaluation Rubric
+            eval_result = score_parent_questionnaire(answers)
+            mcq_marks = eval_result["mcq_score"]  # Out of 30
+            written_marks = eval_result["written_score"]  # Out of 20
+            total_score = eval_result["total_score"]  # Out of 50
+            breakdown = eval_result["breakdown"]
 
-            is_eligible = score >= 4
+            # Eligibility: Minimum 12 marks out of 30 in MCQs (40%) to pass screening
+            is_eligible = mcq_marks >= 12
             qa_status = "PASSED" if is_eligible else "FAILED"
-            tag = get_performance_tag(score)
+            tag = get_performance_tag(int(total_score), max_score=50)
 
             submission.answers = answers
-            submission.score = score
+            # Store total score out of 50 in score field
+            submission.score = int(total_score)
             submission.is_eligible = is_eligible
             submission.qa_status = qa_status
             submission.tag = tag
@@ -1107,7 +1136,7 @@ class SubmitQuizView(APIView):
                 submission.language = language
             submission.save()
 
-            logger.info(f"[POST /api/submit-quiz/] Existing Submission {submission.id} graded: Score {score}/7 ({tag}), QA: {qa_status}")
+            logger.info(f"[POST /api/submit-quiz/] Existing Submission {submission.id} graded: MCQ={mcq_marks}/30, Written={written_marks}/20, Total={total_score}/50 ({tag}), QA: {qa_status}")
 
             return Response({
                 "status": "success",
@@ -1115,13 +1144,16 @@ class SubmitQuizView(APIView):
                 "vibhag": submission.vibhag,
                 "language": submission.language or "en",
                 "qa_status": qa_status,
-                "score": score,
-                "total": len(ALIGNED_ANSWERS),
+                "score": int(total_score),
+                "total": 50,
+                "mcq_score": mcq_marks,
+                "written_score": written_marks,
                 "tag": tag,
                 "can_fill_form": True,
                 "payment_status": submission.payment_status,
-                "message": f"Quiz completed! Score: {score}/7 ({tag}). You can now proceed to fill the admission form.",
-                "breakdown": breakdown
+                "message": f"Questionnaire completed! Score: {int(total_score)}/50 ({tag}). You can now proceed to fill the admission form.",
+                "breakdown": breakdown,
+                "written_responses": eval_result.get("written_responses", {})
             }, status=status.HTTP_200_OK)
 
         # New enquiry creation (Admin Side) -> Token is mandatory
@@ -1154,17 +1186,13 @@ class SubmitQuizView(APIView):
         breakdown = {}
 
         if has_answers:
-            for q_id, correct_ans in ALIGNED_ANSWERS.items():
-                user_ans = answers.get(str(q_id)) or answers.get(q_id)
-                if user_ans and str(user_ans).strip().upper() == correct_ans:
-                    score += 1
-                    breakdown[q_id] = {"selected": user_ans, "matched": True}
-                else:
-                    breakdown[q_id] = {"selected": user_ans, "matched": False}
-
-            is_eligible = score >= 4
+            eval_result = score_parent_questionnaire(answers)
+            score = int(eval_result["total_score"])
+            mcq_marks = eval_result["mcq_score"]
+            is_eligible = mcq_marks >= 12
             qa_status = "PASSED" if is_eligible else "FAILED"
-            tag = get_performance_tag(score)
+            tag = get_performance_tag(score, max_score=50)
+            breakdown = eval_result["breakdown"]
             quiz_completed_at = timezone.now()
         else:
             score = 0
@@ -1227,9 +1255,9 @@ class SubmitQuizView(APIView):
         if not has_answers:
             message = f"Enquiry created for {child_name} (Std: {standard}, Med: {medium}). Payment: {payment_status_input}."
         elif is_eligible:
-            message = f"Congratulations! You scored {score}/7 ({tag}) for Vibhag: {vibhag}. You are eligible to fill the admission form."
+            message = f"Congratulations! You scored {score}/50 ({tag}) for Vibhag: {vibhag}. You are eligible to fill the admission form."
         else:
-            message = f"You have scored {score}/7 ({tag}). Minimum 4 aligned answers are required to be eligible for admission."
+            message = f"You have scored {score}/50 ({tag}). Minimum 12 marks in MCQs are required to be eligible for admission."
 
         return Response({
             "status": "success",
@@ -1259,7 +1287,7 @@ class SubmitQuizView(APIView):
             },
             "qa_status": qa_status,
             "score": score,
-            "total": len(ALIGNED_ANSWERS),
+            "total": 50,
             "tag": tag,
             "can_fill_form": is_eligible,
             "added_by": (logged_in_admin.full_name or logged_in_admin.username) if logged_in_admin else "Online / Self",
@@ -1860,6 +1888,14 @@ class AdminEvaluationAssessmentView(APIView):
         from .evaluation_service import calculate_part_x_score
         calculate_part_x_score(application, save=True)
 
+        # Extract written responses from submission if available
+        written_answers = {}
+        if application.submission and application.submission.answers:
+            for q_id in [11, 12, 13, 14]:
+                ans_text = application.submission.answers.get(str(q_id)) or application.submission.answers.get(q_id)
+                if ans_text:
+                    written_answers[str(q_id)] = ans_text
+
         return Response({
             "status": "success",
             "application_id": application.id,
@@ -1875,6 +1911,7 @@ class AdminEvaluationAssessmentView(APIView):
                 "parent_name": application.father_name or application.mother_name,
                 "parent_whatsapp": application.father_whatsapp or application.mother_whatsapp,
             },
+            "parent_written_responses": written_answers,
             "part_x": {
                 "max_marks": 20,
                 "alak_malak_months": application.alak_malak_months,
@@ -2756,19 +2793,44 @@ class AdminPrintPhysicalFormView(APIView):
                 }
             })
 
-        # Check if caller requested direct HTML layout for browser printing
-        # e.g. GET /api/admin/applications/<id>/print/?format=html
-        print_format = (request.query_params.get("format") or request.query_params.get("view") or "").lower().strip()
-        if print_format == "html":
-            from django.http import HttpResponse
-            html_content = generate_professional_school_admission_form_html(forms_data)
-            return HttpResponse(html_content, content_type="text/html; charset=utf-8")
+        # Generate the professional printable HTML
+        from django.http import HttpResponse
+        html_content = generate_professional_school_admission_form_html(forms_data)
 
-        return Response({
-            "status": "success",
-            "total_rendered": len(forms_data),
-            "forms": forms_data
-        }, status=status.HTTP_200_OK)
+        # First primary candidate details for backward compatibility with frontend JSON readers
+        first_form = forms_data[0] if forms_data else {}
+        first_sp = first_form.get("student_profile", {})
+        first_pp = first_form.get("parent_profile", {})
+        first_fd = first_form.get("form_details", {})
+        first_sc = first_form.get("assessment_scores", {})
+        px = first_sc.get("part_x", {})
+        py = first_sc.get("part_y", {})
+
+        student_name_str = f"{first_sp.get('first_name', '')} {first_sp.get('surname', '')}".strip()
+        father_mother_str = f"{first_pp.get('father_name', '')} / {first_pp.get('mother_name', '')}".strip(" /")
+        std_med_str = f"{first_fd.get('standard', '')} / {first_fd.get('medium', '')}".strip(" /")
+        assessment_summary_str = f"Part X: {px.get('total_part_x', 0)}/20 | Part Y: {py.get('total_part_y', 0)}/30 | Final Aggregate: {first_sc.get('final_score', 0)}/50"
+
+        # Check if caller specifically requested raw JSON
+        # If client explicitly sends Accept: application/json AND does not ask for html, OR query ?format=json
+        print_format = (request.query_params.get("format") or request.query_params.get("view") or "").lower().strip()
+        accept_header = request.headers.get('Accept', '').lower()
+
+        if print_format == "json":
+            return Response({
+                "status": "success",
+                "student_name": student_name_str,
+                "standard_medium": std_med_str,
+                "father_mother": father_mother_str,
+                "whatsapp_contact": first_pp.get("father_mobile") or first_pp.get("mother_mobile") or "-",
+                "assessment_score": assessment_summary_str,
+                "total_rendered": len(forms_data),
+                "forms": forms_data,
+                "html": html_content
+            }, status=status.HTTP_200_OK)
+
+        # By default for print requests, return the ready-to-print official school admission form!
+        return HttpResponse(html_content, content_type="text/html; charset=utf-8")
 
 
 class AdminAcademicYearRollView(APIView):

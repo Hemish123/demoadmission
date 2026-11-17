@@ -41,7 +41,18 @@ def calculate_part_x_score(application: AdmissionApplication, save: bool = True)
     # 2. Parent MCQ score (out of 7)
     mcq_score = 0.0
     if application.submission:
-        mcq_score = float(min(application.submission.score, 7))
+        sub_score = float(application.submission.score or 0)
+        # If score is from new 50-mark questionnaire (or 30-mark MCQ), map to 7 marks:
+        # e.g., (sub_score / 30.0) * 7.0 or if raw MCQ answers exist
+        from .questions_data import score_parent_questionnaire
+        if application.submission.answers:
+            res = score_parent_questionnaire(application.submission.answers)
+            mcq_score = float(res.get("mcq_scaled_to_7", 0.0))
+        elif sub_score > 7:
+            # Map score out of 30 or 50 to 7 marks
+            mcq_score = round(min((sub_score / 30.0) * 7.0, 7.0), 2)
+        else:
+            mcq_score = float(min(sub_score, 7.0))
     application.mcq_score_part_x = mcq_score
 
     # 3. Sibling VK benefit (+3 marks as per official chart, or 0)
