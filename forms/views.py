@@ -953,8 +953,18 @@ class AdminAuditLogView(APIView):
         if endpoint:
             queryset = queryset.filter(endpoint__icontains=endpoint)
 
-        limit = int(request.query_params.get("limit", 100))
-        logs_slice = queryset[:limit]
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", request.query_params.get("limit", 50)))
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 50
+
+        total_records = queryset.count()
+        total_pages = (total_records + page_size - 1) // page_size if total_records > 0 else 1
+
+        offset = (page - 1) * page_size
+        logs_slice = queryset[offset:offset + page_size]
 
         data = [{
             "id": log.id,
@@ -973,7 +983,15 @@ class AdminAuditLogView(APIView):
 
         return Response({
             "status": "success",
-            "total_logs": queryset.count(),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_records": total_records,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_previous": page > 1
+            },
+            "total_logs": total_records,
             "returned_logs": len(data),
             "logs": data
         }, status=status.HTTP_200_OK)
