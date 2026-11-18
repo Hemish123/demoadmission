@@ -1797,7 +1797,7 @@ class AdmissionApplicationView(APIView):
                     date_str=slot_info["date_str"],
                     slot_no=slot_info["slot_no"],
                     time_str=slot_info["time"],
-                    template_name="shreyas_interaction_scheduled"
+                    template_name="shreyas_interaction_scheduled_"
                 )
                 wa_sent = wa_response.get("success", False)
                 application.interaction_whatsapp_sent = wa_sent
