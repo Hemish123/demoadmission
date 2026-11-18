@@ -646,10 +646,10 @@ class AdminInteractionCalendarView(APIView):
                     "date": date_key,
                     "total_children": 0,
                     "slots": {
-                        1: {"slot_no": 1, "time": "9:00 AM TO 10:00 AM", "count": 0, "children": []},
-                        2: {"slot_no": 2, "time": "10:00 AM TO 11:00 AM", "count": 0, "children": []},
-                        3: {"slot_no": 3, "time": "11:00 AM TO 12:00 PM", "count": 0, "children": []},
-                        4: {"slot_no": 4, "time": "12:00 PM TO 1:00 PM", "count": 0, "children": []},
+                        1: {"slot_no": 1, "time": "9:00 AM TO 10:00 AM", "count": 0, "standard_capacity": 10, "max_capacity": 13, "children": []},
+                        2: {"slot_no": 2, "time": "10:00 AM TO 11:00 AM", "count": 0, "standard_capacity": 10, "max_capacity": 13, "children": []},
+                        3: {"slot_no": 3, "time": "11:00 AM TO 12:00 PM", "count": 0, "standard_capacity": 10, "max_capacity": 13, "children": []},
+                        4: {"slot_no": 4, "time": "12:00 PM TO 1:00 PM", "count": 0, "standard_capacity": 10, "max_capacity": 13, "children": []},
                     }
                 }
 
@@ -677,8 +677,10 @@ class AdminInteractionCalendarView(APIView):
             days_list.append({
                 "date": day_obj["date"],
                 "total_scheduled": day_obj["total_children"],
-                "capacity": 40,
-                "is_full": day_obj["total_children"] >= 40,
+                "standard_capacity": 40,
+                "max_admin_capacity": 52,
+                "is_standard_full": day_obj["total_children"] >= 40,
+                "is_full": day_obj["total_children"] >= 52,
                 "slots": slots_list
             })
 
@@ -1852,9 +1854,12 @@ class AdmissionApplicationView(APIView):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request):
+        # Allow any authenticated Admin/Staff/Academician to initiate the update request
         denied = enforce_admin_token(request)
         if denied:
             return denied
+
+        _, logged_in_admin, role = get_authenticated_admin_user(request)
 
         app_id = request.data.get("id") or request.query_params.get("id")
         submission_id = request.data.get("submission_id") or request.query_params.get("submission_id")
@@ -1885,7 +1890,16 @@ class AdmissionApplicationView(APIView):
                     "message": f"No Enquiry or Application found for submission_id {submission_id}."
                 }, status=status.HTTP_404_NOT_FOUND)
 
-        # 1. Update QuizSubmission fields
+        # STRICT ROLE CHECK:
+        # If an AdmissionApplication exists (the full admission form has been submitted),
+        # ONLY users with role 'ADMIN' can edit it. Staff & Academicians are blocked.
+        if application and role != 'ADMIN':
+            return Response({
+                "status": "error",
+                "message": "Access restricted. Completed admission application forms can only be edited by Admin. Staff and Academicians can only edit enquiries."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 1. Update QuizSubmission fields (Allowed for Admin, Staff, Academicians)
         phone_updated = False
         new_phone = (
             request.data.get('father_whatsapp') or
@@ -1951,6 +1965,40 @@ class AdmissionApplicationView(APIView):
 
         # 2. If AdmissionApplication exists, update it too
         if application:
+            # Handle Admin custom slot assignment (Date and Slot No with buffer up to 13)
+            slot_changed = False
+            custom_date = request.data.get('interaction_date')
+            custom_slot_no = request.data.get('interaction_slot_no')
+
+            if custom_date and custom_slot_no:
+                from .slot_service import validate_and_assign_admin_slot
+                from datetime import datetime
+                try:
+                    if isinstance(custom_date, str):
+                        try:
+                            parsed_date = datetime.strptime(custom_date, "%Y-%m-%d").date()
+                        except ValueError:
+                            parsed_date = datetime.strptime(custom_date, "%d-%m-%Y").date()
+                    else:
+                        parsed_date = custom_date
+
+                    assigned_slot = validate_and_assign_admin_slot(
+                        application=application,
+                        chosen_date=parsed_date,
+                        chosen_slot_no=int(custom_slot_no)
+                    )
+                    application.interaction_date = assigned_slot["date"]
+                    application.interaction_slot_no = assigned_slot["slot_no"]
+                    application.interaction_time = assigned_slot["time"]
+                    application.interaction_venue = assigned_slot["venue"]
+                    slot_changed = True
+                    logger.info(f"[ADMIN SLOT ASSIGNED] App {application.application_number} manually assigned to {assigned_slot['date_str']} Slot {assigned_slot['slot_no']} (Position {assigned_slot['booked_count']}/13)")
+                except Exception as e:
+                    return Response({
+                        "status": "error",
+                        "message": str(e)
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
             serializer = AdmissionApplicationSerializer(
                 application,
                 data=request.data,
@@ -1959,6 +2007,37 @@ class AdmissionApplicationView(APIView):
             )
             if serializer.is_valid():
                 updated_app = serializer.save()
+                if slot_changed:
+                    updated_app.interaction_date = application.interaction_date
+                    updated_app.interaction_slot_no = application.interaction_slot_no
+                    updated_app.interaction_time = application.interaction_time
+                    updated_app.interaction_venue = application.interaction_venue
+
+                    # Send WhatsApp notification to parent with newly assigned slot
+                    from .whatsapp import send_whatsapp_interaction_scheduled_message
+                    parent_phone = updated_app.father_whatsapp or (submission.whatsapp_number if submission else "") or updated_app.mother_whatsapp
+                    wa_sent = False
+                    wa_response = {}
+                    if parent_phone:
+                        slot_date_str = updated_app.interaction_date.strftime("%d-%m-%Y")
+                        wa_response = send_whatsapp_interaction_scheduled_message(
+                            recipient_number=parent_phone,
+                            date_str=slot_date_str,
+                            slot_no=updated_app.interaction_slot_no,
+                            time_str=updated_app.interaction_time,
+                            template_name="shreyas_interaction_scheduled_"
+                        )
+                        wa_sent = wa_response.get("success", False)
+                        updated_app.interaction_whatsapp_sent = wa_sent
+                        logger.info(f"[ADMIN SLOT NOTIF] WhatsApp template dispatched to {parent_phone}: success={wa_sent}")
+
+                    updated_app.save(update_fields=[
+                        'interaction_date',
+                        'interaction_slot_no',
+                        'interaction_time',
+                        'interaction_venue',
+                        'interaction_whatsapp_sent'
+                    ])
                 if phone_updated:
                     updated_app.father_whatsapp = submission.whatsapp_number
                     updated_app.save(update_fields=['father_whatsapp'])

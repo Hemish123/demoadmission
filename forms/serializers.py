@@ -334,11 +334,41 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             else:
                 raise serializers.ValidationError({"submission_id": "submission_id is required."})
 
+            # Mandatory Parent Profile Details Validation
+            parent_required_fields = {
+                # Mother required fields
+                'mother_name': "Mother's name is required.",
+                'mother_surname': "Mother's surname is required.",
+                'mother_father_or_husband_name': "Mother's father/husband name is required.",
+                'mother_education': "Mother's education is required.",
+                'mother_occupation': "Mother's occupation is required.",
+                'mother_annual_income': "Mother's annual income is required.",
+                'mother_phone_residence': "Mother's residence phone number is required.",
+                'mother_whatsapp': "Mother's WhatsApp number is required.",
+                'mother_nationality': "Mother's nationality is required.",
+                'mother_address_residence': "Mother's residential address is required.",
+                # Father required fields
+                'father_name': "Father's name is required.",
+                'father_surname': "Father's surname is required.",
+                'father_father_name': "Father's father name is required.",
+                'father_education': "Father's education is required.",
+                'father_occupation': "Father's occupation is required.",
+                'father_annual_income': "Father's annual income is required.",
+                'father_phone_residence': "Father's residence phone number is required.",
+                'father_whatsapp': "Father's WhatsApp number is required.",
+                'father_nationality': "Father's nationality is required.",
+                'father_address_residence': "Father's residential address is required.",
+            }
+
+            field_errors = {}
+            for field_name, err_msg in parent_required_fields.items():
+                val = attrs.get(field_name)
+                if val is None or str(val).strip() == '':
+                    field_errors[field_name] = err_msg
+
             # Terms & Conditions validation
             if not attrs.get('agreed_to_rules'):
-                raise serializers.ValidationError({
-                    "agreed_to_rules": "You must agree to the Shreyas Rules and Regulations to submit the application."
-                })
+                field_errors['agreed_to_rules'] = "You must agree to the Shreyas Rules and Regulations to submit the application."
 
             # Record timestamp for terms & conditions acceptance
             from django.utils import timezone
@@ -348,50 +378,53 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
 
             # Doctor's Health Certificate validation
             if not attrs.get('health_certificate'):
-                raise serializers.ValidationError({
-                    "health_certificate": "The doctor's certificate and health report must be uploaded."
-                })
+                field_errors['health_certificate'] = "The doctor's certificate and health report must be uploaded."
 
             # Document validation rules based on grade/class:
-            # 1. Play group / Nursery: Birth certificate and Aadhar card of parents (Child aadhar optional if not generated yet)
-            # 2. Jr.KG / Sr.KG / Higher: Birth certificate, Aadhar card of parents, and report card of previous academic year
-            # 3. Alak Malak Certificate: OPTIONAL! If applicant opted for Alakmalak:
-            #    - 6 months completed -> upload certificate (gets +5 marks in Part X)
-            #    - 6-12 months completed -> upload certificate (gets +10 marks in Part X)
-            # 4. Sibling: If opted for VK1/VK2/VK3 -> upload receipt (+3 marks in Part X). If not opted -> 0.
+            # 1. Below Std 1 (Nursery, Playgroup, Shishu, Balwadi, Jr.KG, Sr.KG): Alak Malak Certificate is COMPULSORY.
+            # 2. Std 2 and above (Higher classes like Std 2, 3, 4, etc.): Previous year's report card/marksheet is COMPULSORY.
+            # 3. Std 1: Base primary grade (Birth cert & Parent aadhar mandatory).
+
+            std_raw = str(attrs.get('standard') or (submission.standard if submission else '') or '').strip()
+            vibhag_raw = str(attrs.get('vibhag') or (submission.vibhag if submission else '') or '').strip()
+            std_lower = std_raw.lower()
+            vibhag_lower = vibhag_raw.lower()
+
+            # Helper to check grade level
+            is_below_std_1 = any(k in std_lower or k in vibhag_lower for k in [
+                'play', 'nursery', 'shishu', 'toddler', 'balwadi', 'jr', 'sr', 'kg', 'kindergarten'
+            ])
+            # Check numeric standard (e.g. "1", "2", "3", "Std 2")
+            import re
+            num_match = re.search(r'\d+', std_raw)
+            std_num = int(num_match.group()) if num_match else None
+
+            is_std_2_or_above = (std_num is not None and std_num >= 2) or any(
+                f"std {n}" in std_lower or f"grade {n}" in std_lower or f"class {n}" in std_lower for n in range(2, 13)
+            )
+
+            if is_below_std_1:
+                # Below Std 1 requires Alak Malak Certificate compulsory
+                if not attrs.get('alak_malak_certificate'):
+                    field_errors['alak_malak_certificate'] = "Alak Malak Certificate is compulsory for admission below Std 1 (Nursery, Shishu, Balwadi, KG)."
+            elif is_std_2_or_above:
+                # Std 2 and above requires previous year's report card/marksheet compulsory
+                if not attrs.get('previous_report_card'):
+                    field_errors['previous_report_card'] = "Previous year's report card / marksheet is compulsory for admission in Std 2 and above."
 
             # Mandatory: Birth certificate & Parent Aadhar
             if not attrs.get('birth_certificate'):
-                raise serializers.ValidationError({
-                    "birth_certificate": "Birth Certificate is compulsory and must be uploaded."
-                })
+                field_errors['birth_certificate'] = "Birth Certificate is compulsory and must be uploaded."
 
             if not (attrs.get('parent_aadhar_card') or attrs.get('child_aadhar_card')):
-                raise serializers.ValidationError({
-                    "parent_aadhar_card": "Parent's Aadhar Card is compulsory and must be uploaded."
-                })
-
-            # Check if Jr/Sr.KG or higher requires previous report card
-            std_str = str(attrs.get('standard') or (submission.standard if submission else '') or '').strip().lower()
-            vibhag_str = str(attrs.get('vibhag') or (submission.vibhag if submission else '') or '').strip().lower()
-            
-            is_playgroup_nursery = any(k in std_str or k in vibhag_str for k in ['play', 'nursery', 'shishu', 'toddler'])
-            
-            if not is_playgroup_nursery:
-                # Jr.KG, Sr.KG, and higher classes require previous report card
-                if not attrs.get('previous_report_card'):
-                    raise serializers.ValidationError({
-                        "previous_report_card": "Previous academic year report card is required for Jr.KG / Sr.KG and higher classes."
-                    })
-                    raise serializers.ValidationError({
-                        "previous_report_card": "Previous year's report card is required for admission."
-                    })
+                field_errors['parent_aadhar_card'] = "Parent's Aadhar Card is compulsory and must be uploaded."
 
             # Signature validation (At least one parent/guardian must sign)
             if not (attrs.get('mother_signature') or attrs.get('father_signature') or attrs.get('guardian_signature')):
-                raise serializers.ValidationError({
-                    "signatures": "At least one signature (Mother, Father, or Guardian) is required."
-                })
+                field_errors['signatures'] = "At least one signature (Mother, Father, or Guardian) is required."
+
+            if field_errors:
+                raise serializers.ValidationError(field_errors)
 
         # -------------------------------------------------------------
         # File Formats Validation:
