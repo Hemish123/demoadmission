@@ -1053,9 +1053,7 @@ class SubmitQuizView(APIView):
         if payment_status:
             queryset = queryset.filter(payment_status__iexact=payment_status)
 
-        serializer = QuizSubmissionListSerializer(queryset, many=True)
-
-        # Card summary counts
+        # Card summary counts (calculated on full filtered queryset before slicing)
         total_count = queryset.count()
         fees_collected = queryset.filter(payment_status="RECEIVED").count()
         qa_passed = queryset.filter(qa_status="PASSED").count()
@@ -1064,11 +1062,34 @@ class SubmitQuizView(APIView):
         submitted_forms = queryset.filter(admission_application__isnull=False).count()
         pending_forms = queryset.filter(payment_status="RECEIVED", admission_application__isnull=True).count()
 
+        # Pagination support (defaults to page 1, 50 records per page)
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", request.query_params.get("limit", 50)))
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 50
+
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+        offset = (page - 1) * page_size
+        paged_queryset = queryset[offset:offset + page_size]
+
+        serializer = QuizSubmissionListSerializer(paged_queryset, many=True)
+
         return Response({
             "status": "success",
             "scope": "ALL" if role == 'ADMIN' else "MY_ENQUIRIES",
             "user_role": role,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_records": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_previous": page > 1
+            },
             "total_enquiries": total_count,
+            "returned_enquiries": len(serializer.data),
             "fees_collected": fees_collected,
             "fee_unpaid": total_count - fees_collected,
             "qa_passed": qa_passed,
@@ -2355,13 +2376,35 @@ class AdminMeritBoardView(APIView):
                 "cutoff_seats": cutoff_seats
             }
 
-        serializer = MeritRankBoardSerializer(ranked_apps, many=True)
+        # Pagination support (default page 1, 50 applicants per page)
+        total_applicants = ranked_apps.count()
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", request.query_params.get("limit", 50)))
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 50
+
+        total_pages = (total_applicants + page_size - 1) // page_size if total_applicants > 0 else 1
+        offset = (page - 1) * page_size
+        paged_ranked_apps = ranked_apps[offset:offset + page_size]
+
+        serializer = MeritRankBoardSerializer(paged_ranked_apps, many=True)
 
         return Response({
             "status": "success",
             "summary": summary,
             "cutoff_seats": cutoff_seats,
-            "total_applicants": ranked_apps.count(),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_records": total_applicants,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_previous": page > 1
+            },
+            "total_applicants": total_applicants,
+            "returned_applicants": len(serializer.data),
             "merit_list": serializer.data
         }, status=status.HTTP_200_OK)
 
