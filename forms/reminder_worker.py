@@ -48,7 +48,7 @@ def send_due_admission_reminders():
             res = send_whatsapp_template_message(
                 sub.whatsapp_number,
                 sub.id,
-                template_name="shreyas_admission_reminder_"
+                template_name="shreyas_admission_reminder"
             )
 
             if res.get("success"):
