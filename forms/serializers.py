@@ -390,18 +390,22 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             std_lower = std_raw.lower()
             vibhag_lower = vibhag_raw.lower()
 
-            # Helper to check grade level
-            is_below_std_1 = any(k in std_lower or k in vibhag_lower for k in [
-                'play', 'nursery', 'shishu', 'toddler', 'balwadi', 'jr', 'sr', 'kg', 'kindergarten'
-            ])
-            # Check numeric standard (e.g. "1", "2", "3", "Std 2")
+            # Check numeric standard first (e.g. "1", "2", "3", "Std 3")
             import re
             num_match = re.search(r'\d+', std_raw)
             std_num = int(num_match.group()) if num_match else None
 
-            is_std_2_or_above = (std_num is not None and std_num >= 2) or any(
-                f"std {n}" in std_lower or f"grade {n}" in std_lower or f"class {n}" in std_lower for n in range(2, 13)
-            )
+            if std_num is not None:
+                is_below_std_1 = False
+                is_std_2_or_above = (std_num >= 2)
+            else:
+                # If non-numeric standard, check names (nursery, playgroup, etc.)
+                is_below_std_1 = any(k in std_lower or k in vibhag_lower for k in [
+                    'play', 'nursery', 'shishu', 'toddler', 'balwadi', 'jr', 'sr', 'kg', 'kindergarten'
+                ])
+                is_std_2_or_above = any(
+                    f"std {n}" in std_lower or f"grade {n}" in std_lower or f"class {n}" in std_lower for n in range(2, 13)
+                )
 
             if is_below_std_1:
                 # Below Std 1 requires Alak Malak Certificate compulsory
