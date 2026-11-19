@@ -24,11 +24,15 @@ load_dotenv(BASE_DIR / '.env', override=True)
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-qzj#zqcxl--0bmat+m8(quzp@m4umi2wc*sd880p_nbe46o0it')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    '*',
+    'demoadmission-eghscxh3c5cbgab7.centralindia-01.azurewebsites.net',
+]
 
 # CSRF Trusted Origins for Azure App Service & DevTunnels
 CSRF_TRUSTED_ORIGINS = [
     'https://*.azurewebsites.net',
+    'https://demoadmission-eghscxh3c5cbgab7.centralindia-01.azurewebsites.net',
     'https://shreyashfoundation-e6eagcdeebbbhwgd.centralindia-01.azurewebsites.net',
     'https://*.inc1.devtunnels.ms',
     'http://localhost:8000',
