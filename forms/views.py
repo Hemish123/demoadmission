@@ -114,13 +114,13 @@ def enforce_admin_token(request, required_role: Optional[str] = None):
 
 class AdminLoginView(APIView):
     """
-    Two-Step Verification: Step 1 - Verify Username/Email & PIN, then send OTP to registered email.
+    Direct Login: Verify Username/Email & PIN/Password, and immediately return JWT permanent token.
     POST /api/admin/login/
     Body: {"email": "admin@shreyasfoundation.in", "pin": "1234"}
     """
     def post(self, request):
         identifier = (request.data.get("email") or request.data.get("username") or "").strip()
-        pin = str(request.data.get("pin", "")).strip()
+        pin = str(request.data.get("pin") or request.data.get("password") or "").strip()
 
         if not identifier or not pin:
             return Response({
@@ -139,52 +139,30 @@ class AdminLoginView(APIView):
                 "message": "Invalid email/username or PIN."
             }, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Generate 6-digit OTP for 2-step verification
-        otp = f"{random.randint(100000, 999999)}"
-        admin_user.otp_code = otp
-        admin_user.otp_expires_at = timezone.now() + timedelta(minutes=10)
-        admin_user.save(update_fields=['otp_code', 'otp_expires_at'])
+        # Clear any leftover OTP fields
+        if admin_user.otp_code or admin_user.otp_expires_at:
+            admin_user.otp_code = None
+            admin_user.otp_expires_at = None
+            admin_user.save(update_fields=['otp_code', 'otp_expires_at'])
 
-        subject = "Shreyas Foundation Admin - 2-Step Verification Login OTP"
-        body = (
-            f"Namaste {admin_user.full_name or admin_user.username},\n\n"
-            f"Your 2-Step Verification OTP for logging into Shreyas Foundation Portal is: {otp}\n\n"
-            f"If you did not attempt this login, please contact technical support immediately.\n\n"
-            f"Shreyas Foundation Technical Team"
-        )
-        try:
-            from .email_service import generate_otp_email_html
-            sender = getattr(settings, 'DEFAULT_FROM_EMAIL', 'JMS Tech Solution <anand@jmstech.co>')
-            html_message = generate_otp_email_html(
-                recipient_name=admin_user.full_name or admin_user.username,
-                otp_code=otp,
-                purpose="login"
-            )
-            send_mail(
-                subject=subject,
-                message=body,
-                from_email=sender,
-                recipient_list=[admin_user.email],
-                html_message=html_message,
-                fail_silently=False
-            )
-            logger.info(f"2-Step verification OTP sent to {admin_user.email}")
-        except Exception as e:
-            logger.error(f"Failed to send 2-Step verification email OTP: {e}", exc_info=True)
+        # Generate permanent JWT token directly
+        token = generate_jwt_token(admin_user)
 
-        # Mask email for privacy (e.g. pr***11@gmail.com)
-        email_parts = admin_user.email.split('@')
-        if len(email_parts) == 2 and len(email_parts[0]) > 2:
-            masked_email = f"{email_parts[0][:2]}***{email_parts[0][-2:]}@{email_parts[1]}"
-        else:
-            masked_email = admin_user.email
+        logger.info(f"Admin direct login successful for {admin_user.username} ({admin_user.email})")
 
         return Response({
-            "status": "otp_required",
-            "message": f"Credentials verified. 2-Step verification OTP has been sent to your email ({masked_email}).",
-            "email": admin_user.email,
-            "masked_email": masked_email,
-            **({"debug_otp": otp} if settings.DEBUG else {})
+            "status": "success",
+            "message": "Login successful.",
+            "token": token,
+            "token_type": "Bearer",
+            "is_permanent": True,
+            "user": {
+                "id": admin_user.id,
+                "username": admin_user.username,
+                "full_name": admin_user.full_name,
+                "email": admin_user.email,
+                "role": admin_user.role
+            }
         }, status=status.HTTP_200_OK)
 
 
