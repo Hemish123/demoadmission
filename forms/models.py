@@ -169,6 +169,11 @@ class AdmissionApplication(models.Model):
     guardian_education = models.CharField(max_length=150, blank=True)
     guardian_occupation = models.CharField(max_length=150, blank=True)
     guardian_annual_income = models.CharField(max_length=50, blank=True)
+    guardians = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Stores multiple guardians as a list of dictionaries"
+    )
 
     # 5. Birth Place
     birth_place_city = models.CharField(max_length=100, blank=True)
@@ -208,6 +213,11 @@ class AdmissionApplication(models.Model):
     sibling_vikas_kendra_1_receipt = models.CharField(max_length=100, blank=True)
     sibling_vikas_kendra_2_opted = models.CharField(max_length=10, blank=True)
     sibling_vikas_kendra_2_receipt = models.CharField(max_length=100, blank=True)
+    siblings = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Stores multiple siblings in Shreyas: [{name, class, vk1_opted, vk1_receipt, vk2_opted, vk2_receipt, vk3_opted, vk3_receipt}, ...]"
+    )
 
     # 11. Present School
     current_school_name = models.CharField(max_length=255, blank=True)
@@ -257,6 +267,10 @@ class AdmissionApplication(models.Model):
 
     # Assessment & Scores (PART X + PART Y)
     # PART X (Total: 20 Marks)
+    has_attended_alak_malak = models.BooleanField(
+        default=False,
+        help_text="Whether child attended Alak Malak (Yes/No)"
+    )
     alak_malak_months = models.IntegerField(default=0, help_text="0, 6 (5 marks), or 12 (10 marks)")
     alak_malak_score = models.FloatField(default=0.0, help_text="0, 5, or 10")
     mcq_score_part_x = models.FloatField(default=0.0, help_text="Score out of 7 from Parent MCQ")

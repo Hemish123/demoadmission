@@ -67,6 +67,21 @@ def calculate_part_x_score(application: AdmissionApplication, save: bool = True)
         application.sibling_opted_vk
     )
 
+    # Check multiple siblings list if present
+    if hasattr(application, 'siblings') and isinstance(application.siblings, list) and len(application.siblings) > 0:
+        for sib in application.siblings:
+            r1 = sib.get('vk1_receipt') or sib.get('sibling_vikas_kendra_1_receipt')
+            r2 = sib.get('vk2_receipt') or sib.get('sibling_vikas_kendra_2_receipt')
+            r3 = sib.get('vk3_receipt') or sib.get('sibling_vikas_kendra_3_receipt')
+            o1 = bool(sib.get('vk1_opted') or sib.get('sibling_vikas_kendra_1_opted'))
+            o2 = bool(sib.get('vk2_opted') or sib.get('sibling_vikas_kendra_2_opted'))
+            o3 = bool(sib.get('vk3_opted') or sib.get('sibling_vikas_kendra_3_opted'))
+
+            if (o1 and r1) or (o2 and r2) or (o3 and r3):
+                is_vk_opted = True
+                has_receipt = True
+                break
+
     if application.has_sibling_in_shreyas and is_vk_opted and has_receipt:
         sibling_score = 3.0
         application.sibling_opted_vk = True

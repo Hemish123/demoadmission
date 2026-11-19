@@ -262,6 +262,8 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
     created_by_user = serializers.SerializerMethodField()
     quiz_answers = serializers.SerializerMethodField()
     quiz_details = serializers.SerializerMethodField()
+    guardians = serializers.JSONField(required=False, default=list)
+    siblings = serializers.JSONField(required=False, default=list)
 
     class Meta:
         model = AdmissionApplication
@@ -319,6 +321,7 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
         return None
 
     def validate(self, attrs):
+        field_errors = {}
         is_admin_update = self.context.get('is_admin_update', False)
 
         submission_id = attrs.get('submission_id')
@@ -360,7 +363,6 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                 'father_address_residence': "Father's residential address is required.",
             }
 
-            field_errors = {}
             for field_name, err_msg in parent_required_fields.items():
                 val = attrs.get(field_name)
                 if val is None or str(val).strip() == '':
@@ -407,12 +409,31 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                     f"std {n}" in std_lower or f"grade {n}" in std_lower or f"class {n}" in std_lower for n in range(2, 13)
                 )
 
-            if is_below_std_1:
-                # Below Std 1 requires Alak Malak Certificate compulsory
+            # Document validation rules:
+            # 1. Alak Malak validation:
+            #    - Ask if attended Alak Malak (has_attended_alak_malak = true/false).
+            #    - If NO (or false/blank): skip certificate upload, proceed to next step.
+            #    - If YES (true): Duration (6 months or 12 months) is selected, and Alak Malak certificate is COMPULSORY.
+            has_alak_malak = attrs.get('has_attended_alak_malak')
+            if isinstance(has_alak_malak, str):
+                has_alak_malak = has_alak_malak.strip().lower() in ['true', '1', 'yes']
+
+            if has_alak_malak:
+                months_val = attrs.get('alak_malak_months')
+                try:
+                    months_val = int(months_val) if months_val is not None else 0
+                except (ValueError, TypeError):
+                    months_val = 0
+                
+                if months_val not in [6, 12]:
+                    # Accept either 6 or 12 months duration if child attended Alak Malak
+                    field_errors['alak_malak_months'] = "Please select completed duration: 6 Months (5 marks) or 12 Months (10 marks)."
+
                 if not attrs.get('alak_malak_certificate'):
-                    field_errors['alak_malak_certificate'] = "Alak Malak Certificate is compulsory for admission below Std 1 (Nursery, Shishu, Balwadi, KG)."
-            elif is_std_2_or_above:
-                # Std 2 and above requires previous year's report card/marksheet compulsory
+                    field_errors['alak_malak_certificate'] = "Alak Malak Certificate is compulsory since you answered 'Yes' for attending Alak Malak."
+
+            # 2. Std 2 and above requires previous year's report card/marksheet compulsory
+            if is_std_2_or_above:
                 if not attrs.get('previous_report_card'):
                     field_errors['previous_report_card'] = "Previous year's report card / marksheet is compulsory for admission in Std 2 and above."
 
@@ -450,6 +471,71 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                 validate_uploaded_document(attrs.get(doc_field), doc_field)
 
         # Pre-fill automatic population & protection for users
+        # If 'siblings' array provided, validate VK1/VK2/VK3 receipt numbers and sync the first sibling
+        has_sibling = attrs.get('has_sibling_in_shreyas')
+        if isinstance(has_sibling, str):
+            has_sibling = has_sibling.strip().lower() in ['true', '1', 'yes']
+
+        siblings_data = attrs.get('siblings')
+        if has_sibling:
+            if isinstance(siblings_data, list) and len(siblings_data) > 0:
+                for idx, sib in enumerate(siblings_data, start=1):
+                    sib_name = sib.get('name') or sib.get('sibling_name', '')
+                    if not sib_name:
+                        field_errors[f'sibling_{idx}_name'] = f"Sibling #{idx} name is required."
+
+                    # Check VK1
+                    vk1_opted = bool(sib.get('vk1_opted') or sib.get('sibling_vikas_kendra_1_opted'))
+                    if vk1_opted and not (sib.get('vk1_receipt') or sib.get('sibling_vikas_kendra_1_receipt')):
+                        field_errors[f'sibling_{idx}_vk1_receipt'] = f"Receipt number is required for Vikas Kendra 1 (VK1) for sibling #{idx} ({sib_name or 'Sibling'})."
+
+                    # Check VK2
+                    vk2_opted = bool(sib.get('vk2_opted') or sib.get('sibling_vikas_kendra_2_opted'))
+                    if vk2_opted and not (sib.get('vk2_receipt') or sib.get('sibling_vikas_kendra_2_receipt')):
+                        field_errors[f'sibling_{idx}_vk2_receipt'] = f"Receipt number is required for Vikas Kendra 2 (VK2) for sibling #{idx} ({sib_name or 'Sibling'})."
+
+                    # Check VK3
+                    vk3_opted = bool(sib.get('vk3_opted') or sib.get('sibling_vikas_kendra_3_opted'))
+                    if vk3_opted and not (sib.get('vk3_receipt') or sib.get('sibling_vikas_kendra_3_receipt')):
+                        field_errors[f'sibling_{idx}_vk3_receipt'] = f"Receipt number is required for Vikas Kendra 3 (VK3) for sibling #{idx} ({sib_name or 'Sibling'})."
+
+                # Sync first sibling to legacy single fields
+                first_s = siblings_data[0]
+                attrs.setdefault('sibling_name', first_s.get('name') or first_s.get('sibling_name', ''))
+                attrs.setdefault('sibling_class', first_s.get('class') or first_s.get('sibling_class', ''))
+                attrs.setdefault('sibling_vikas_kendra_1_opted', 'Yes' if first_s.get('vk1_opted') else 'No')
+                attrs.setdefault('sibling_vikas_kendra_1_receipt', first_s.get('vk1_receipt') or first_s.get('sibling_vikas_kendra_1_receipt', ''))
+                attrs.setdefault('sibling_vikas_kendra_2_opted', 'Yes' if first_s.get('vk2_opted') else 'No')
+                attrs.setdefault('sibling_vikas_kendra_2_receipt', first_s.get('vk2_receipt') or first_s.get('sibling_vikas_kendra_2_receipt', ''))
+            else:
+                # Flat legacy fields validation
+                if attrs.get('sibling_vikas_kendra_1_opted') in ['Yes', 'yes', True] and not attrs.get('sibling_vikas_kendra_1_receipt'):
+                    field_errors['sibling_vikas_kendra_1_receipt'] = "Receipt number is required when Vikas Kendra 1 is selected."
+                if attrs.get('sibling_vikas_kendra_2_opted') in ['Yes', 'yes', True] and not attrs.get('sibling_vikas_kendra_2_receipt'):
+                    field_errors['sibling_vikas_kendra_2_receipt'] = "Receipt number is required when Vikas Kendra 2 is selected."
+
+        if field_errors:
+            raise serializers.ValidationError(field_errors)
+
+        # If 'guardians' array provided, sync the first guardian to traditional guardian_* fields for backward compatibility
+        guardians_data = attrs.get('guardians')
+        if isinstance(guardians_data, list) and len(guardians_data) > 0:
+            first_g = guardians_data[0]
+            if isinstance(first_g, dict):
+                attrs.setdefault('guardian_name', first_g.get('guardian_name') or first_g.get('name', ''))
+                attrs.setdefault('guardian_surname', first_g.get('guardian_surname') or first_g.get('surname', ''))
+                attrs.setdefault('guardian_father_name', first_g.get('guardian_father_name') or first_g.get('father_name', ''))
+                attrs.setdefault('guardian_address_residence', first_g.get('guardian_address_residence') or first_g.get('address_residence', ''))
+                attrs.setdefault('guardian_address_office', first_g.get('guardian_address_office') or first_g.get('address_office', ''))
+                attrs.setdefault('guardian_phone_residence', first_g.get('guardian_phone_residence') or first_g.get('phone_residence', ''))
+                attrs.setdefault('guardian_phone_office', first_g.get('guardian_phone_office') or first_g.get('phone_office', ''))
+                attrs.setdefault('guardian_whatsapp', first_g.get('guardian_whatsapp') or first_g.get('whatsapp', ''))
+                attrs.setdefault('guardian_email', first_g.get('guardian_email') or first_g.get('email', ''))
+                attrs.setdefault('guardian_nationality', first_g.get('guardian_nationality') or first_g.get('nationality', 'Indian'))
+                attrs.setdefault('guardian_education', first_g.get('guardian_education') or first_g.get('education', ''))
+                attrs.setdefault('guardian_occupation', first_g.get('guardian_occupation') or first_g.get('occupation', ''))
+                attrs.setdefault('guardian_annual_income', str(first_g.get('guardian_annual_income') or first_g.get('annual_income', '')))
+
         request = self.context.get('request')
         is_admin_update = self.context.get('is_admin_update', False)
         is_staff = bool(request and request.user and request.user.is_staff)
