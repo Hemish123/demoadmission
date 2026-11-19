@@ -166,11 +166,11 @@ class AdminLoginView(APIView):
                 from_email=sender,
                 recipient_list=[admin_user.email],
                 html_message=html_message,
-                fail_silently=True
+                fail_silently=False
             )
             logger.info(f"2-Step verification OTP sent to {admin_user.email}")
         except Exception as e:
-            logger.error(f"Failed to send 2-Step verification email OTP: {e}")
+            logger.error(f"Failed to send 2-Step verification email OTP: {e}", exc_info=True)
 
         # Mask email for privacy (e.g. pr***11@gmail.com)
         email_parts = admin_user.email.split('@')
@@ -539,11 +539,11 @@ class ForgotPinRequestOTPView(APIView):
                 from_email=sender,
                 recipient_list=[admin_user.email],
                 html_message=html_message,
-                fail_silently=True
+                fail_silently=False
             )
             logger.info(f"Forgot PIN OTP sent to {admin_user.email}")
         except Exception as e:
-            logger.error(f"Failed to send email OTP: {e}")
+            logger.error(f"Failed to send email OTP: {e}", exc_info=True)
 
         return Response({
             "status": "success",
