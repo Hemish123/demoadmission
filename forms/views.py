@@ -2052,23 +2052,23 @@ class AdmissionApplicationView(APIView):
                     updated_app.interaction_time = application.interaction_time
                     updated_app.interaction_venue = application.interaction_venue
 
-                    # Send WhatsApp notification to parent with newly assigned slot
+                    # Send WhatsApp notification to parent with newly rescheduled slot
                     from .whatsapp import send_whatsapp_interaction_scheduled_message
                     parent_phone = updated_app.father_whatsapp or (submission.whatsapp_number if submission else "") or updated_app.mother_whatsapp
                     wa_sent = False
                     wa_response = {}
                     if parent_phone:
-                        slot_date_str = updated_app.interaction_date.strftime("%d-%m-%Y")
+                        slot_date_str = updated_app.interaction_date.strftime("%d/%m/%Y")
                         wa_response = send_whatsapp_interaction_scheduled_message(
                             recipient_number=parent_phone,
                             date_str=slot_date_str,
                             slot_no=updated_app.interaction_slot_no,
                             time_str=updated_app.interaction_time,
-                            template_name="shreyas_interaction_scheduled"
+                            template_name="shreyas_interaction_rescheduled"
                         )
                         wa_sent = wa_response.get("success", False)
                         updated_app.interaction_whatsapp_sent = wa_sent
-                        logger.info(f"[ADMIN SLOT NOTIF] WhatsApp template dispatched to {parent_phone}: success={wa_sent}")
+                        logger.info(f"[ADMIN SLOT NOTIF] WhatsApp template 'shreyas_interaction_rescheduled' dispatched to {parent_phone}: success={wa_sent}")
 
                     updated_app.save(update_fields=[
                         'interaction_date',

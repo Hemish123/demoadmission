@@ -289,7 +289,7 @@ def send_whatsapp_interaction_scheduled_message(
                     "type": "body",
                     "parameters": [
                         {"type": "text", "text": str(date_str)},
-                        {"type": "text", "text": f"Slot {slot_no}"},
+                        {"type": "text", "text": str(slot_no)},
                         {"type": "text", "text": str(time_str)}
                     ]
                 }
