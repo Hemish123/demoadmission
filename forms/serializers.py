@@ -337,36 +337,68 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             else:
                 raise serializers.ValidationError({"submission_id": "submission_id is required."})
 
-            # Mandatory Parent Profile Details Validation
-            parent_required_fields = {
-                # Mother required fields
-                'mother_name': "Mother's name is required.",
-                'mother_surname': "Mother's surname is required.",
-                'mother_father_or_husband_name': "Mother's father/husband name is required.",
-                'mother_education': "Mother's education is required.",
-                'mother_occupation': "Mother's occupation is required.",
-                'mother_annual_income': "Mother's annual income is required.",
-                'mother_phone_residence': "Mother's residence phone number is required.",
-                'mother_whatsapp': "Mother's WhatsApp number is required.",
-                'mother_nationality': "Mother's nationality is required.",
-                'mother_address_residence': "Mother's residential address is required.",
-                # Father required fields
-                'father_name': "Father's name is required.",
-                'father_surname': "Father's surname is required.",
-                'father_father_name': "Father's father name is required.",
-                'father_education': "Father's education is required.",
-                'father_occupation': "Father's occupation is required.",
-                'father_annual_income': "Father's annual income is required.",
-                'father_phone_residence': "Father's residence phone number is required.",
-                'father_whatsapp': "Father's WhatsApp number is required.",
-                'father_nationality': "Father's nationality is required.",
-                'father_address_residence': "Father's residential address is required.",
-            }
+            # Check if applicant has parents or is raised by Guardian
+            has_parents_val = attrs.get('has_parents')
+            if isinstance(has_parents_val, str):
+                has_parents_val = has_parents_val.strip().lower() in ['true', '1', 'yes']
+            elif has_parents_val is None:
+                # If has_parents not explicitly passed, determine by presence of parent vs guardian data
+                # Default to True unless guardian data is present and parents are absent
+                has_guardians_data = bool(attrs.get('guardians') or attrs.get('guardian_name'))
+                has_any_parent_data = bool(attrs.get('mother_name') or attrs.get('father_name'))
+                has_parents_val = not (has_guardians_data and not has_any_parent_data)
 
-            for field_name, err_msg in parent_required_fields.items():
-                val = attrs.get(field_name)
-                if val is None or str(val).strip() == '':
-                    field_errors[field_name] = err_msg
+            attrs['has_parents'] = has_parents_val
+
+            if has_parents_val:
+                # Mandatory Parent Profile Details Validation
+                parent_required_fields = {
+                    # Mother required fields
+                    'mother_name': "Mother's name is required.",
+                    'mother_surname': "Mother's surname is required.",
+                    'mother_father_or_husband_name': "Mother's father/husband name is required.",
+                    'mother_education': "Mother's education is required.",
+                    'mother_occupation': "Mother's occupation is required.",
+                    'mother_annual_income': "Mother's annual income is required.",
+                    'mother_phone_residence': "Mother's residence phone number is required.",
+                    'mother_whatsapp': "Mother's WhatsApp number is required.",
+                    'mother_nationality': "Mother's nationality is required.",
+                    'mother_address_residence': "Mother's residential address is required.",
+                    # Father required fields
+                    'father_name': "Father's name is required.",
+                    'father_surname': "Father's surname is required.",
+                    'father_father_name': "Father's father name is required.",
+                    'father_education': "Father's education is required.",
+                    'father_occupation': "Father's occupation is required.",
+                    'father_annual_income': "Father's annual income is required.",
+                    'father_phone_residence': "Father's residence phone number is required.",
+                    'father_whatsapp': "Father's WhatsApp number is required.",
+                    'father_nationality': "Father's nationality is required.",
+                    'father_address_residence': "Father's residential address is required.",
+                }
+
+                for field_name, err_msg in parent_required_fields.items():
+                    val = attrs.get(field_name)
+                    if val is None or str(val).strip() == '':
+                        field_errors[field_name] = err_msg
+            else:
+                # Child does not have parents -> Guardian details become COMPULSORY
+                guardians_list = attrs.get('guardians')
+                primary_guardian_name = attrs.get('guardian_name')
+                if isinstance(guardians_list, list) and len(guardians_list) > 0:
+                    first_g = guardians_list[0]
+                    if isinstance(first_g, dict):
+                        primary_guardian_name = first_g.get('guardian_name') or first_g.get('name', '')
+                        if not primary_guardian_name:
+                            field_errors['guardians'] = "Guardian name is compulsory when parents are not available."
+                        if not (first_g.get('guardian_whatsapp') or first_g.get('whatsapp')):
+                            field_errors['guardian_whatsapp'] = "Guardian WhatsApp/Contact number is compulsory."
+                elif not primary_guardian_name:
+                    field_errors['guardian_name'] = "Guardian details are compulsory since child has no parents."
+                    field_errors['guardian_whatsapp'] = "Guardian WhatsApp/Contact number is compulsory."
+
+                if not attrs.get('guardian_signature'):
+                    field_errors['guardian_signature'] = "Guardian's signature is compulsory when parents are not available."
 
             # Terms & Conditions validation
             if not attrs.get('agreed_to_rules'):
@@ -437,12 +469,12 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
                 if not attrs.get('previous_report_card'):
                     field_errors['previous_report_card'] = "Previous year's report card / marksheet is compulsory for admission in Std 2 and above."
 
-            # Mandatory: Birth certificate & Parent Aadhar
+            # Mandatory: Birth certificate & Parent/Guardian Aadhar
             if not attrs.get('birth_certificate'):
                 field_errors['birth_certificate'] = "Birth Certificate is compulsory and must be uploaded."
 
             if not (attrs.get('parent_aadhar_card') or attrs.get('child_aadhar_card')):
-                field_errors['parent_aadhar_card'] = "Parent's Aadhar Card is compulsory and must be uploaded."
+                field_errors['parent_aadhar_card'] = "Parent's or Guardian's Aadhar Card is compulsory and must be uploaded."
 
             # Signature validation (At least one parent/guardian must sign)
             if not (attrs.get('mother_signature') or attrs.get('father_signature') or attrs.get('guardian_signature')):

@@ -126,6 +126,10 @@ class AdmissionApplication(models.Model):
     child_father_name = models.CharField(max_length=100, blank=True)
 
     # 2. Mother's Details
+    has_parents = models.BooleanField(
+        default=True,
+        help_text="True if parents exist, False if orphan/raised by Guardian"
+    )
     mother_surname = models.CharField(max_length=100, blank=True)
     mother_name = models.CharField(max_length=100, blank=True)
     mother_father_or_husband_name = models.CharField(max_length=100, blank=True)
