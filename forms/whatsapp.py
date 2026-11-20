@@ -249,7 +249,7 @@ def send_whatsapp_interaction_scheduled_message(
     date_str: str,
     slot_no: int,
     time_str: str,
-    template_name: str = "shreyas_interaction_scheduled_"
+    template_name: str = "shreyas_interaction_scheduled__"
 ) -> dict:
     """
     Sends WhatsApp notification to parents upon Admission Form submission
